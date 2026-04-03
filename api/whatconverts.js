@@ -10,7 +10,7 @@
  *        GET /api/whatconverts?endpoint=leads&lead_type=phone_call&account_id=123&...
  */
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   // CORS headers for your frontend
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -36,38 +36,42 @@ export default async function handler(req, res) {
   // Whitelist allowed endpoints
   const allowed = ["accounts", "leads", "profiles"];
   if (!allowed.includes(endpoint)) {
-    return res.status(400).json({ error: `Endpoint '${endpoint}' not allowed. Use: ${allowed.join(", ")}` });
+    return res.status(400).json({ error: "Endpoint '" + endpoint + "' not allowed. Use: " + allowed.join(", ") });
   }
 
   // Build WhatConverts URL
-  const url = new URL(`https://app.whatconverts.com/api/v1/${endpoint}`);
-  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  var url = "https://app.whatconverts.com/api/v1/" + endpoint + "?";
+  var queryParts = [];
+  Object.keys(params).forEach(function(k) {
+    queryParts.push(encodeURIComponent(k) + "=" + encodeURIComponent(params[k]));
+  });
+  url += queryParts.join("&");
 
   // Forward request with Basic Auth
-  const auth = Buffer.from(`${token}:${secret}`).toString("base64");
+  var auth = Buffer.from(token + ":" + secret).toString("base64");
 
   try {
-    const response = await fetch(url.toString(), {
+    var response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Basic ${auth}`,
-        Accept: "application/json",
-      },
+        "Authorization": "Basic " + auth,
+        "Accept": "application/json"
+      }
     });
 
-    const data = await response.json();
+    var data = await response.json();
 
     if (!response.ok) {
       return res.status(response.status).json({
-        error: `WhatConverts returned ${response.status}`,
-        details: data,
+        error: "WhatConverts returned " + response.status,
+        details: data
       });
     }
 
-    // Cache for 5 minutes (data doesn't change that fast)
+    // Cache for 5 minutes
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
     return res.status(200).json(data);
   } catch (err) {
     return res.status(500).json({ error: "Failed to reach WhatConverts API", message: err.message });
   }
-}
+};
