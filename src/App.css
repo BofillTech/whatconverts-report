@@ -1,0 +1,255 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'DM Sans', -apple-system, sans-serif;
+  background: #f4f5f7;
+  color: #1a1a2e;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+}
+
+/* Header */
+.header { margin-bottom: 28px; }
+.logo { display: flex; align-items: center; gap: 14px; }
+.logo h1 { font-size: 21px; font-weight: 700; letter-spacing: -0.4px; line-height: 1.2; }
+.logo p { font-size: 13px; color: #6b7280; margin-top: 2px; }
+
+/* Controls */
+.controls {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 18px 22px;
+  margin-bottom: 24px;
+}
+.control-row {
+  display: flex;
+  align-items: end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.field label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6b7280;
+  margin-bottom: 5px;
+}
+.field input {
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.btn-primary {
+  padding: 9px 28px;
+  background: linear-gradient(135deg, #0f4c75, #1b262c);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s;
+}
+.btn-primary:hover { opacity: 0.9; }
+.btn-primary:disabled { background: #9ca3af; cursor: default; }
+
+.btn-cancel {
+  padding: 9px 20px;
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.btn-export {
+  padding: 9px 18px;
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.btn-export:hover { background: #d1fae5; }
+
+/* Progress */
+.progress-wrap { margin-bottom: 24px; }
+.progress-info { display: flex; justify-content: space-between; font-size: 12px; color: #6b7280; margin-bottom: 6px; }
+.progress-bar { height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, #0f4c75, #3282b8); border-radius: 3px; transition: width 0.3s; }
+
+/* Error */
+.error-box {
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 24px;
+  font-size: 13px;
+  color: #991b1b;
+}
+
+/* Stats */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 24px;
+}
+.stat-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+.stat-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6b7280;
+  margin-bottom: 6px;
+}
+.stat-value { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
+.stat-sub { font-size: 12px; color: #0f4c75; margin-top: 4px; }
+
+/* Table */
+.table-container {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.table-header {
+  padding: 14px 20px;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.table-header h2 { font-size: 15px; font-weight: 700; }
+.table-meta { font-size: 12px; color: #6b7280; }
+.table-scroll { overflow-x: auto; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead tr { border-bottom: 2px solid #e5e7eb; }
+th {
+  padding: 10px 14px;
+  text-align: right;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6b7280;
+  white-space: nowrap;
+}
+th.left { text-align: left; }
+th.gads { color: #0f4c75; }
+
+td { padding: 10px 14px; text-align: right; }
+td.left { text-align: left; }
+td.name { font-weight: 500; }
+td.mono, .mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+td.positive, .positive { color: #065f46; font-weight: 700; }
+td.muted, .muted { color: #9ca3af; }
+td.bold, .bold { font-weight: 600; }
+td.gads-val { color: #0f4c75; }
+
+tr.even { background: #fff; }
+tr.odd { background: #fafbfc; }
+tr:hover { background: #f3f4f6; }
+
+.expand-btn {
+  background: none;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  color: #6b7280;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.expand-btn:hover { background: #f3f4f6; }
+
+/* Detail row */
+.detail-row td { padding: 0; background: #f8f9fb; }
+.detail-table-wrap { padding: 12px 20px 16px; }
+.detail-table { font-size: 12px; }
+.detail-table th { font-size: 10px; padding: 6px 10px; }
+.detail-table td { font-size: 12px; padding: 6px 10px; }
+.detail-empty { padding: 12px 20px; font-size: 12px; color: #9ca3af; }
+
+.method-tag {
+  display: inline-block;
+  padding: 2px 7px;
+  background: #eff6ff;
+  color: #1e40af;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* No activity */
+.no-activity {
+  margin-top: 16px;
+  padding: 12px 18px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* Log */
+.log-section { margin-top: 24px; }
+.log-section summary {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.log-output {
+  background: #1a1a2e;
+  border-radius: 8px;
+  padding: 12px 16px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1.8;
+  color: #a5b4c4;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .stats-grid { grid-template-columns: 1fr; }
+  .control-row { flex-direction: column; align-items: stretch; }
+  .stat-value { font-size: 22px; }
+}
