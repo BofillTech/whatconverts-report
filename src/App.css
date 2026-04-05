@@ -10,18 +10,16 @@ body {
 }
 
 .app {
-  max-width: 1040px;
+  max-width: 1100px;
   margin: 0 auto;
   padding: 28px 20px 60px;
 }
 
-/* Header */
 .header { margin-bottom: 28px; }
 .logo { display: flex; align-items: center; gap: 14px; }
 .logo h1 { font-size: 21px; font-weight: 700; letter-spacing: -0.4px; line-height: 1.2; }
 .logo p { font-size: 13px; color: #6b7280; margin-top: 2px; }
 
-/* Controls */
 .controls {
   background: #fff;
   border: 1px solid #e5e7eb;
@@ -94,13 +92,11 @@ body {
 }
 .btn-export:hover { background: #d1fae5; }
 
-/* Progress */
 .progress-wrap { margin-bottom: 24px; }
 .progress-info { display: flex; justify-content: space-between; font-size: 12px; color: #6b7280; margin-bottom: 6px; }
 .progress-bar { height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden; }
 .progress-fill { height: 100%; background: linear-gradient(90deg, #0f4c75, #3282b8); border-radius: 3px; transition: width 0.3s; }
 
-/* Error */
 .error-box {
   background: #fef2f2;
   border: 1px solid #fca5a5;
@@ -111,12 +107,14 @@ body {
   color: #991b1b;
 }
 
-/* Stats */
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 14px;
   margin-bottom: 24px;
+}
+.stats-grid.four {
+  grid-template-columns: repeat(4, 1fr);
 }
 .stat-card {
   background: #fff;
@@ -135,7 +133,6 @@ body {
 .stat-value { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
 .stat-sub { font-size: 12px; color: #0f4c75; margin-top: 4px; }
 
-/* Table */
 .table-container {
   background: #fff;
   border: 1px solid #e5e7eb;
@@ -173,6 +170,7 @@ td.left { text-align: left; }
 td.name { font-weight: 500; }
 td.mono, .mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
 td.positive, .positive { color: #065f46; font-weight: 700; }
+td.intent, .intent { color: #b45309; font-weight: 600; }
 td.muted, .muted { color: #9ca3af; }
 td.bold, .bold { font-weight: 600; }
 td.gads-val { color: #0f4c75; }
@@ -196,13 +194,26 @@ tr:hover { background: #f3f4f6; }
 }
 .expand-btn:hover { background: #f3f4f6; }
 
-/* Detail row */
 .detail-row td { padding: 0; background: #f8f9fb; }
-.detail-table-wrap { padding: 12px 20px 16px; }
+.detail-table-wrap { padding: 12px 20px 16px; overflow-x: auto; }
 .detail-table { font-size: 12px; }
 .detail-table th { font-size: 10px; padding: 6px 10px; }
 .detail-table td { font-size: 12px; padding: 6px 10px; }
 .detail-empty { padding: 12px 20px; font-size: 12px; color: #9ca3af; }
+.summary-cell { text-align: left; max-width: 260px; font-size: 11px; color: #4b5563; }
+
+.type-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+  text-transform: uppercase;
+}
+.type-tag.booked { background: #d1fae5; color: #065f46; }
+.type-tag.high_intent { background: #fef3c7; color: #92400e; }
+.type-tag.inquiry { background: #e0e7ff; color: #3730a3; }
 
 .method-tag {
   display: inline-block;
@@ -215,7 +226,6 @@ tr:hover { background: #f3f4f6; }
   font-family: 'JetBrains Mono', monospace;
 }
 
-/* No activity */
 .no-activity {
   margin-top: 16px;
   padding: 12px 18px;
@@ -226,7 +236,6 @@ tr:hover { background: #f3f4f6; }
   color: #6b7280;
 }
 
-/* Log */
 .log-section { margin-top: 24px; }
 .log-section summary {
   font-size: 12px;
@@ -239,7 +248,7 @@ tr:hover { background: #f3f4f6; }
   background: #1a1a2e;
   border-radius: 8px;
   padding: 12px 16px;
-  max-height: 200px;
+  max-height: 240px;
   overflow-y: auto;
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
@@ -247,9 +256,12 @@ tr:hover { background: #f3f4f6; }
   color: #a5b4c4;
 }
 
-/* Responsive */
-@media (max-width: 640px) {
-  .stats-grid { grid-template-columns: 1fr; }
+@media (max-width: 768px) {
+  .stats-grid, .stats-grid.four { grid-template-columns: repeat(2, 1fr); }
   .control-row { flex-direction: column; align-items: stretch; }
   .stat-value { font-size: 22px; }
 }
+@media (max-width: 480px) {
+  .stats-grid, .stats-grid.four { grid-template-columns: 1fr; }
+}
+
