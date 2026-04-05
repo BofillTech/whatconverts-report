@@ -282,7 +282,7 @@ export default function App() {
               var duration = parseInt(lead.call_duration_seconds) || 0;
 
               // Only analyze calls > 30 seconds with transcripts
-              if (transcript && transcript.length > 30 && duration > 30) {
+              if (transcript && transcript.length > 30 && duration > 45) {
                 totals.leads_with_transcripts.push({
                   lead_id: String(lead.lead_id),
                   transcript: transcript,
