@@ -36,7 +36,7 @@ function isHotelAccount(name) {
   return HOTEL_ACCOUNTS.some(function(h) { return n.includes(h.toLowerCase()); });
 }
 
-var MIN_CALL_DURATION = 45;
+var MIN_CALL_DURATION = 20;
 
 // ── Classification from built-in fields ──
 function classifyFromFields(lead) {
@@ -364,7 +364,7 @@ export default function App() {
 
             return fetchLeadDetail(lead.lead_id).then(function(detail) {
               // Look for transcript in various possible fields
-              var transcript = detail.call_transcript || detail.transcript || "";
+              var transcript = detail.call_transcription || detail.call_transcript || detail.transcript || "";
 
               // Check ai_analysis for call summary
               if (!transcript && detail.ai_analysis) {
