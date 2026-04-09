@@ -364,7 +364,21 @@ export default function App() {
 
             return fetchLeadDetail(lead.lead_id).then(function(detail) {
               // Look for transcript in various possible fields
-              var transcript = detail.call_transcription || detail.call_transcript || detail.transcript || "";
+              // Log all field names for first lead to find transcript field
+if (leadIdx === 1) {
+  var allKeys = Object.keys(detail).join(", ");
+  addLog("  FIELDS: " + allKeys);
+  var longFields = Object.keys(detail).filter(function(k) { return typeof detail[k] === "string" && detail[k].length > 40; });
+  longFields.forEach(function(k) { addLog("  " + k + ": " + detail[k].substring(0, 80) + "..."); });
+}
+var transcript = detail.call_transcription || detail.call_transcript || detail.transcript || "";
+if (!transcript && typeof detail === "object") {
+  Object.keys(detail).forEach(function(k) {
+    if (typeof detail[k] === "string" && detail[k].length > 50 && k !== "lead_url" && k !== "landing_url" && k !== "recording_url") {
+      transcript = detail[k];
+    }
+  });
+}
 
               // Check ai_analysis for call summary
               if (!transcript && detail.ai_analysis) {
