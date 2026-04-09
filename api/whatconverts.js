@@ -1,8 +1,3 @@
-/**
- * Vercel Serverless Proxy for WhatConverts API
- * Supports: accounts, leads (list), leads/{id} (detail with transcript)
- */
-
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -18,7 +13,8 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: "WhatConverts credentials not configured" });
   }
 
-  var { endpoint, lead_id, ...params } = req.query;
+  var endpoint = req.query.endpoint;
+  var lead_id = req.query.lead_id;
 
   if (!endpoint) {
     return res.status(400).json({ error: "Missing endpoint parameter" });
@@ -29,17 +25,22 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: "Endpoint not allowed" });
   }
 
-  // Build URL - support individual lead fetch
+  // Build the path - individual lead if lead_id provided
   var path = endpoint;
   if (endpoint === "leads" && lead_id) {
     path = "leads/" + lead_id;
   }
 
-  var url = "https://app.whatconverts.com/api/v1/" + path;
+  // Build query string from remaining params
   var queryParts = [];
-  Object.keys(params).forEach(function(k) {
-    queryParts.push(encodeURIComponent(k) + "=" + encodeURIComponent(params[k]));
+  var skip = ["endpoint", "lead_id"];
+  Object.keys(req.query).forEach(function(k) {
+    if (skip.indexOf(k) === -1) {
+      queryParts.push(encodeURIComponent(k) + "=" + encodeURIComponent(req.query[k]));
+    }
   });
+
+  var url = "https://app.whatconverts.com/api/v1/" + path;
   if (queryParts.length > 0) url += "?" + queryParts.join("&");
 
   var auth = Buffer.from(token + ":" + secret).toString("base64");
