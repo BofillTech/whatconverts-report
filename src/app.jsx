@@ -182,9 +182,9 @@ export default function App() {
   }, [apiFetch]);
 
   // Fetch individual lead detail (to get transcript)
-  var fetchLeadDetail = useCallback(function(leadId) {
-    return apiFetch("leads", { lead_id: leadId });
-  }, [apiFetch]);
+var fetchLeadDetail = useCallback(function(leadId) {
+    return fetch("/api/lead?id=" + leadId).then(function(r) { return r.json(); });
+  }, []);
 
   // Analyze transcripts via Claude
   var analyzeTranscripts = useCallback(function(batch, accountName) {
