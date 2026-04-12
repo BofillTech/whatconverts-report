@@ -196,8 +196,9 @@ export default function App() {
         });
       }
       return resp.json();
-    }).then(function(data) {
-      return data.results || [];
+ }).then(function(data) {
+      if (data.error) { return { error: data.error, results: [] }; }
+      return { results: data.results || [] };
     });
   }, []);
 
@@ -404,7 +405,9 @@ export default function App() {
               batchIdx += batch.length;
               addLog("  Analyzing batch " + Math.ceil(batchIdx / 10) + "...");
 
-              return analyzeTranscripts(batch, acct.account_name).then(function(aiResults) {
+              return analyzeTranscripts(batch, acct.account_name).then(function(resp) {
+                if (resp.error) addLog("  API ERROR: " + String(resp.error).substring(0, 200));
+                var aiResults = resp.results || [];
                 aiResults.forEach(function(r) {
                   if (r.classification === "BOOKED" || r.classification === "HIGH_INTENT") {
                     var original = transcriptsForAI.find(function(t) { return String(t.lead_id) === String(r.lead_id); });
