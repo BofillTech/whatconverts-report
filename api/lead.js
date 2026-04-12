@@ -20,6 +20,12 @@ module.exports = async function handler(req, res) {
       headers: { "Authorization": "Basic " + auth, "Accept": "application/json" }
     });
     var data = await response.json();
+
+    // API wraps single lead in {leads: [...]} — unwrap it
+    if (data.leads && data.leads.length > 0) {
+      return res.status(200).json(data.leads[0]);
+    }
+
     return res.status(200).json(data);
   } catch (err) {
     return res.status(500).json({ error: err.message });
