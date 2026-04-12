@@ -14,56 +14,57 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: "Missing transcripts" });
   }
 
-  var transcripts = body.transcripts.slice(0, 10);
+  var transcripts = body.transcripts.slice(0, 5);
   var accountName = body.account_name || "Unknown";
 
   var transcriptBlock = "";
   for (var i = 0; i < transcripts.length; i++) {
-    var text = (transcripts[i].transcript || "").substring(0, 2000);
+    var text = (transcripts[i].transcript || "").substring(0, 1500);
     transcriptBlock += "=== CALL " + (i + 1) + " (lead_id: " + transcripts[i].lead_id + ") ===\n" + text + "\n\n";
   }
 
-  var requestBody = {
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 2000,
-    messages: [
-      {
-        role: "user",
-        content: "You analyze phone call transcripts for a hospitality business called \"" + accountName + "\". For each call, determine if a booking/reservation was made or if the caller showed strong intent to book.\n\nClassify each as:\n- BOOKED: Reservation made or confirmed\n- HIGH_INTENT: Strong intent to book (checking specific dates, rates, providing payment info)\n- INQUIRY: General questions only\n- NOT_RELEVANT: Spam, vendor, cancellation, directions\n\nFor BOOKED and HIGH_INTENT, estimate value from any mentions of nights, rates, rooms. Use $0 if unknown.\n\nRespond ONLY with a JSON array, no other text:\n[{\"lead_id\": \"...\", \"classification\": \"BOOKED\", \"estimated_value\": 0, \"nights\": 0, \"summary\": \"one sentence\"}]\n\nTranscripts:\n\n" + transcriptBlock
-      }
-    ]
-  };
+  var userMsg = "Analyze these " + transcripts.length + " phone call transcripts for \"" + accountName + "\".\n\nFor each call classify as: BOOKED (reservation made), HIGH_INTENT (strong interest), INQUIRY (general question), or NOT_RELEVANT (spam/vendor/other).\n\nEstimate booking value if possible. Respond ONLY with a JSON array:\n[{\"lead_id\":\"123\",\"classification\":\"BOOKED\",\"estimated_value\":0,\"nights\":0,\"summary\":\"one sentence\"}]\n\n" + transcriptBlock;
 
-  try {
-    var response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify(requestBody)
-    });
+  var models = ["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022"];
 
-    var data = await response.json();
-
-    if (!response.ok) {
-      return res.status(response.status).json({
-        error: "Anthropic " + response.status,
-        detail: data
+  for (var m = 0; m < models.length; m++) {
+    try {
+      var response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01"
+        },
+        body: JSON.stringify({
+          model: models[m],
+          max_tokens: 2000,
+          messages: [{ role: "user", content: userMsg }]
+        })
       });
+
+      var data = await response.json();
+
+      if (!response.ok) {
+        if (m < models.length - 1) continue;
+        return res.status(200).json({
+          error: "Anthropic " + response.status + ": " + JSON.stringify(data),
+          results: []
+        });
+      }
+
+      var resultText = "";
+      for (var j = 0; j < data.content.length; j++) {
+        if (data.content[j].type === "text") resultText += data.content[j].text;
+      }
+
+      resultText = resultText.replace(/```json/g, "").replace(/```/g, "").trim();
+      var results = JSON.parse(resultText);
+      return res.status(200).json({ results: results });
+
+    } catch (err) {
+      if (m < models.length - 1) continue;
+      return res.status(200).json({ error: err.message, results: [] });
     }
-
-    var text = "";
-    for (var j = 0; j < data.content.length; j++) {
-      if (data.content[j].type === "text") text += data.content[j].text;
-    }
-
-    text = text.replace(/```json/g, "").replace(/```/g, "").trim();
-    var results = JSON.parse(text);
-
-    return res.status(200).json({ results: results });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
   }
 };
