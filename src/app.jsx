@@ -3,8 +3,8 @@ import "./App.css";
 
 var API_PROXY = "/api/whatconverts";
 var ANALYZE_URL = "/api/analyze";
+var LEAD_URL = "/api/lead";
 
-// ── Hotel accounts only (from bofilltech.com/ads/hotel-online-booking-conversions) ──
 var HOTEL_ACCOUNTS = [
   "Abellona Inn",
   "Archway Fishtown",
@@ -38,7 +38,6 @@ function isHotelAccount(name) {
 
 var MIN_CALL_DURATION = 20;
 
-// ── Classification from built-in fields ──
 function classifyFromFields(lead) {
   var sv = parseFloat(lead.sales_value) || 0;
   if (sv > 0) return { isBooking: true, value: sv, method: "sales_value" };
@@ -135,7 +134,6 @@ export default function App() {
     setLog(function(p) { return p.concat(new Date().toLocaleTimeString() + " — " + msg); });
   }, []);
 
-  // ── API helpers ──
   var apiFetch = useCallback(function(endpoint, params) {
     params = params || {};
     var url = new URL(API_PROXY, window.location.origin);
@@ -181,12 +179,11 @@ export default function App() {
     return fetchPage();
   }, [apiFetch]);
 
-  // Fetch individual lead detail (to get transcript)
-var fetchLeadDetail = useCallback(function(leadId) {
-    return fetch("/api/lead?id=" + leadId).then(function(r) { return r.json(); });
+  // THIS IS THE KEY FIX - uses /api/lead endpoint directly
+  var fetchLeadDetail = useCallback(function(leadId) {
+    return fetch(LEAD_URL + "?id=" + leadId).then(function(r) { return r.json(); });
   }, []);
 
-  // Analyze transcripts via Claude
   var analyzeTranscripts = useCallback(function(batch, accountName) {
     return fetch(ANALYZE_URL, {
       method: "POST",
@@ -204,7 +201,6 @@ var fetchLeadDetail = useCallback(function(leadId) {
     });
   }, []);
 
-  // ── Main report ──
   var runReport = useCallback(function() {
     setRunning(true);
     setError(null);
@@ -215,14 +211,15 @@ var fetchLeadDetail = useCallback(function(leadId) {
 
     var range = getMonthRange(month);
     addLog("Starting report for " + range.label);
-    addLog("Filtering to hotel accounts only (" + HOTEL_ACCOUNTS.length + " properties)");
+    addLog("Filtering to hotel accounts (" + HOTEL_ACCOUNTS.length + " properties)");
     setPhase("Pulling call data...");
 
     addLog("Fetching accounts...");
     fetchAllPages("accounts", { accounts_per_page: 50 }, "accounts").then(function(allAccounts) {
-      // Filter to hotel accounts only
       var accounts = allAccounts.filter(function(a) { return isHotelAccount(a.account_name || ""); });
-      addLog("Found " + allAccounts.length + " total accounts, " + accounts.length + " hotel accounts");
+      // Sort alphabetically
+      accounts.sort(function(a, b) { return (a.account_name || "").localeCompare(b.account_name || ""); });
+      addLog("Found " + allAccounts.length + " total, " + accounts.length + " hotel accounts");
       setProgress({ current: 0, total: accounts.length, account: "" });
 
       var reportData = [];
@@ -239,16 +236,9 @@ var fetchLeadDetail = useCallback(function(leadId) {
         var totals = {
           account_name: name,
           account_id: acct.account_id,
-          total_calls: 0,
-          booked: 0,
-          high_intent: 0,
-          total_value: 0,
-          google_ads_calls: 0,
-          google_ads_booked: 0,
-          google_ads_high_intent: 0,
-          google_ads_value: 0,
-          bookings: [],
-          leads_to_analyze: [] // leads that need transcript fetch + AI
+          total_calls: 0, booked: 0, high_intent: 0, total_value: 0,
+          google_ads_calls: 0, google_ads_booked: 0, google_ads_high_intent: 0, google_ads_value: 0,
+          bookings: [], leads_to_analyze: []
         };
 
         var profiles = acct.profiles || [];
@@ -260,23 +250,17 @@ var fetchLeadDetail = useCallback(function(leadId) {
           profileIndex++;
 
           return fetchAllPages("leads", {
-            lead_type: "phone_call",
-            start_date: range.start,
-            end_date: range.end,
-            leads_per_page: 250,
-            account_id: acct.account_id,
-            profile_id: profile.profile_id
+            lead_type: "phone_call", start_date: range.start, end_date: range.end,
+            leads_per_page: 250, account_id: acct.account_id, profile_id: profile.profile_id
           }, "leads").then(function(leads) {
             addLog("  " + (profile.profile_name || "Profile") + ": " + leads.length + " calls");
             totals.total_calls += leads.length;
 
             leads.forEach(function(lead) {
               if (lead.spam || lead.duplicate) return;
-
               var gads = isGoogleAds(lead);
               if (gads) totals.google_ads_calls++;
 
-              // Check built-in fields first
               var fieldResult = classifyFromFields(lead);
               if (fieldResult.isBooking) {
                 totals.booked++;
@@ -286,57 +270,52 @@ var fetchLeadDetail = useCallback(function(leadId) {
                   lead_id: lead.lead_id, date: lead.date_created || "", value: fieldResult.value,
                   method: fieldResult.method, classification: "BOOKED",
                   source: lead.lead_source || "", medium: lead.lead_medium || "",
-                  campaign: lead.lead_campaign || "", summary: "Classified from " + fieldResult.method,
+                  campaign: lead.lead_campaign || "", summary: "From " + fieldResult.method,
                   is_google_ads: gads
                 });
                 return;
               }
 
-              // Queue leads > 45s for transcript fetch
               var duration = parseInt(lead.call_duration_seconds) || 0;
               if (duration >= MIN_CALL_DURATION) {
                 totals.leads_to_analyze.push({
-                  lead_id: lead.lead_id,
-                  date: lead.date_created || "",
-                  source: lead.lead_source || "",
-                  medium: lead.lead_medium || "",
-                  campaign: lead.lead_campaign || "",
-                  duration: duration,
-                  is_google_ads: gads
+                  lead_id: lead.lead_id, date: lead.date_created || "",
+                  source: lead.lead_source || "", medium: lead.lead_medium || "",
+                  campaign: lead.lead_campaign || "", duration: duration, is_google_ads: gads
                 });
               }
             });
 
             return processNextProfile();
           }).catch(function(e) {
-            addLog("  ⚠ Error: " + e.message);
+            addLog("  Error: " + e.message);
             return processNextProfile();
           });
         }
 
         return processNextProfile().then(function() {
           reportData.push(totals);
-          addLog("  → " + totals.total_calls + " calls, " + totals.leads_to_analyze.length + " queued for transcript analysis");
+          addLog("  -> " + totals.total_calls + " calls, " + totals.leads_to_analyze.length + " queued for AI");
           accountIndex++;
           return processNextAccount();
         });
       }
 
       return processNextAccount().then(function() {
-        // Phase 2: Fetch transcripts and analyze
-        setPhase("Fetching transcripts...");
+        setPhase("Fetching transcripts & analyzing...");
         var totalToAnalyze = 0;
         reportData.forEach(function(a) { totalToAnalyze += a.leads_to_analyze.length; });
-        addLog("\n── Transcript Fetch & AI Analysis ──");
-        addLog("Leads to fetch transcripts for: " + totalToAnalyze);
+        addLog("");
+        addLog("=== TRANSCRIPT FETCH & AI ANALYSIS ===");
+        addLog("Total leads to analyze: " + totalToAnalyze);
 
         if (totalToAnalyze === 0) {
-          addLog("No qualifying calls found (all < " + MIN_CALL_DURATION + "s or already classified)");
+          addLog("No qualifying calls found");
           return reportData;
         }
 
         var acctIdx = 0;
-        var fetched = 0;
+        var globalFetched = 0;
 
         function processNextAccountTranscripts() {
           if (acctIdx >= reportData.length || abortRef.current) return Promise.resolve();
@@ -347,10 +326,9 @@ var fetchLeadDetail = useCallback(function(leadId) {
 
           if (!leadsToAnalyze.length) return processNextAccountTranscripts();
 
-          addLog("Fetching transcripts for " + acct.account_name + " (" + leadsToAnalyze.length + " calls)...");
-          setPhase("Fetching transcripts: " + acct.account_name);
+          addLog("Fetching transcripts: " + acct.account_name + " (" + leadsToAnalyze.length + " calls)");
+          setPhase("Transcripts: " + acct.account_name);
 
-          // Fetch individual lead details to get transcripts
           var transcriptsForAI = [];
           var leadIdx = 0;
 
@@ -359,49 +337,54 @@ var fetchLeadDetail = useCallback(function(leadId) {
 
             var lead = leadsToAnalyze[leadIdx];
             leadIdx++;
-            fetched++;
-            setProgress({ current: fetched, total: totalToAnalyze, account: acct.account_name + " (transcripts)" });
+            globalFetched++;
+            setProgress({ current: globalFetched, total: totalToAnalyze, account: acct.account_name + " (transcripts)" });
 
             return fetchLeadDetail(lead.lead_id).then(function(detail) {
-              // Look for transcript in various possible fields
-              // Log all field names for first lead to find transcript field
-if (leadIdx === 1) {
-  var allKeys = Object.keys(detail).join(", ");
-  addLog("  FIELDS: " + allKeys);
-  var longFields = Object.keys(detail).filter(function(k) { return typeof detail[k] === "string" && detail[k].length > 40; });
-  longFields.forEach(function(k) { addLog("  " + k + ": " + detail[k].substring(0, 80) + "..."); });
-}
-var transcript = detail.call_transcription || detail.call_transcript || detail.transcript || "";
-if (!transcript && typeof detail === "object") {
-  Object.keys(detail).forEach(function(k) {
-    if (typeof detail[k] === "string" && detail[k].length > 50 && k !== "lead_url" && k !== "landing_url" && k !== "recording_url") {
-      transcript = detail[k];
-    }
-  });
-}
-
-              // Check ai_analysis for call summary
-              if (!transcript && detail.ai_analysis) {
-                if (detail.ai_analysis["Call Summary"]) transcript = detail.ai_analysis["Call Summary"];
-                if (detail.ai_analysis["Transcript"]) transcript = detail.ai_analysis["Transcript"];
-              }
-
-              if (transcript && transcript.length > 50) {
-                transcriptsForAI.push({
-                  lead_id: String(lead.lead_id),
-                  transcript: transcript,
-                  date: lead.date,
-                  source: lead.source,
-                  medium: lead.medium,
-                  campaign: lead.campaign,
-                  is_google_ads: lead.is_google_ads
+              // Log fields for first lead of first account to debug
+              if (globalFetched === 1) {
+                addLog("  DEBUG lead fields: " + Object.keys(detail).join(", "));
+                // Log any string field longer than 40 chars
+                Object.keys(detail).forEach(function(k) {
+                  if (typeof detail[k] === "string" && detail[k].length > 40) {
+                    addLog("  DEBUG " + k + ": " + detail[k].substring(0, 80) + "...");
+                  }
                 });
               }
 
-              // Small delay between API calls
+              // Try every possible transcript field name
+              var transcript = "";
+              var tryFields = ["call_transcription", "call_transcript", "transcript", "transcription", "recording_transcription"];
+              for (var i = 0; i < tryFields.length; i++) {
+                if (detail[tryFields[i]] && typeof detail[tryFields[i]] === "string" && detail[tryFields[i]].length > 20) {
+                  transcript = detail[tryFields[i]];
+                  if (globalFetched === 1) addLog("  DEBUG found transcript in: " + tryFields[i]);
+                  break;
+                }
+              }
+
+              // Fallback: check any long string field
+              if (!transcript) {
+                Object.keys(detail).forEach(function(k) {
+                  if (!transcript && typeof detail[k] === "string" && detail[k].length > 80 &&
+                      k !== "lead_url" && k !== "landing_url" && k !== "recording_url" && k !== "recording") {
+                    transcript = detail[k];
+                    if (globalFetched === 1) addLog("  DEBUG fallback transcript in: " + k);
+                  }
+                });
+              }
+
+              if (transcript && transcript.length > 30) {
+                transcriptsForAI.push({
+                  lead_id: String(lead.lead_id), transcript: transcript,
+                  date: lead.date, source: lead.source, medium: lead.medium,
+                  campaign: lead.campaign, is_google_ads: lead.is_google_ads
+                });
+              }
+
               return new Promise(function(r) { setTimeout(r, 120); }).then(fetchNextTranscript);
             }).catch(function(e) {
-              // Skip this lead on error
+              if (globalFetched === 1) addLog("  DEBUG fetch error: " + e.message);
               return new Promise(function(r) { setTimeout(r, 120); }).then(fetchNextTranscript);
             });
           }
@@ -411,7 +394,6 @@ if (!transcript && typeof detail === "object") {
 
             if (!transcriptsForAI.length) return processNextAccountTranscripts();
 
-            // Send to Claude in batches of 10
             setPhase("AI analyzing: " + acct.account_name);
             var batchIdx = 0;
 
@@ -422,12 +404,11 @@ if (!transcript && typeof detail === "object") {
               batchIdx += batch.length;
               addLog("  Analyzing batch " + Math.ceil(batchIdx / 10) + "...");
 
-              return analyzeTranscripts(batch, acct.account_name).then(function(results) {
-                results.forEach(function(r) {
+              return analyzeTranscripts(batch, acct.account_name).then(function(aiResults) {
+                aiResults.forEach(function(r) {
                   if (r.classification === "BOOKED" || r.classification === "HIGH_INTENT") {
                     var original = transcriptsForAI.find(function(t) { return String(t.lead_id) === String(r.lead_id); });
                     if (!original) return;
-
                     var val = parseFloat(r.estimated_value) || 0;
 
                     if (r.classification === "BOOKED") {
@@ -451,13 +432,13 @@ if (!transcript && typeof detail === "object") {
 
                 return new Promise(function(r) { setTimeout(r, 500); }).then(processNextBatch);
               }).catch(function(e) {
-                addLog("  ⚠ Batch error: " + e.message);
+                addLog("  Batch error: " + e.message);
                 return new Promise(function(r) { setTimeout(r, 1000); }).then(processNextBatch);
               });
             }
 
             return processNextBatch().then(function() {
-              addLog("  → " + acct.account_name + ": " + acct.booked + " booked, " + acct.high_intent + " high-intent");
+              addLog("  Result: " + acct.booked + " booked, " + acct.high_intent + " high-intent");
               return processNextAccountTranscripts();
             });
           });
@@ -466,22 +447,20 @@ if (!transcript && typeof detail === "object") {
         return processNextAccountTranscripts().then(function() { return reportData; });
       });
     }).then(function(reportData) {
-      reportData.sort(function(a, b) {
-        return (b.booked + b.high_intent) - (a.booked + a.high_intent) || b.total_value - a.total_value;
-      });
+      // Sort alphabetically
+      reportData.sort(function(a, b) { return (a.account_name || "").localeCompare(b.account_name || ""); });
       setResults({ data: reportData, month: getMonthRange(month).label });
       setPhase("");
-      addLog("✓ Report complete");
+      addLog("Done!");
     }).catch(function(e) {
       setError(e.message);
-      addLog("✗ Error: " + e.message);
+      addLog("Error: " + e.message);
       setPhase("");
     }).finally(function() {
       setRunning(false);
     });
   }, [month, addLog, fetchAllPages, fetchLeadDetail, analyzeTranscripts]);
 
-  // CSV exports
   var exportCSV = useCallback(function() {
     if (!results) return;
     var rows = [["Account","Total Calls","Booked","High Intent","Booking Rate %","Revenue","Google Ads Calls","GAds Booked","GAds High Intent","GAds Revenue"]];
@@ -503,7 +482,7 @@ if (!transcript && typeof detail === "object") {
         rows.push([acct.account_name, b.date, b.classification, b.value.toFixed(2), b.source, b.medium, b.campaign, (b.summary || "").replace(/"/g, "'"), b.is_google_ads ? "Yes" : "No"]);
       });
     });
-    var csv = rows.map(function(r) { return r.map(function(c) { return '"' + c + '"'; }).join(","); }).join("\n");
+    var csv = rows.map(function(r) { return r.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(","); }).join("\n");
     var blob = new Blob([csv], { type: "text/csv" });
     var a = document.createElement("a"); a.href = URL.createObjectURL(blob);
     a.download = "call_bookings_detail_" + month + ".csv"; a.click();
@@ -525,7 +504,7 @@ if (!transcript && typeof detail === "object") {
           </svg>
           <div>
             <h1>Call Booking Report</h1>
-            <p>AI-powered phone booking analysis — hotel accounts only</p>
+            <p>AI-powered phone booking analysis — hotel accounts</p>
           </div>
         </div>
       </header>
@@ -579,15 +558,9 @@ if (!transcript && typeof detail === "object") {
               <table>
                 <thead>
                   <tr>
-                    <th className="left">Hotel</th>
-                    <th>Calls</th>
-                    <th>Booked</th>
-                    <th>High Intent</th>
-                    <th>Rate</th>
-                    <th>Revenue</th>
-                    <th className="gads">GAds Calls</th>
-                    <th className="gads">GAds Book</th>
-                    <th className="gads">GAds Rev</th>
+                    <th className="left">Hotel</th><th>Calls</th><th>Booked</th><th>High Intent</th>
+                    <th>Rate</th><th>Revenue</th>
+                    <th className="gads">GAds Calls</th><th className="gads">GAds Book</th><th className="gads">GAds Rev</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -615,9 +588,7 @@ if (!transcript && typeof detail === "object") {
                       </tr>,
                       expanded[a.account_id] ? (
                         <tr key={a.account_id + "-detail"} className="detail-row">
-                          <td colSpan={10}>
-                            <BookingDetail bookings={a.bookings} />
-                          </td>
+                          <td colSpan={10}><BookingDetail bookings={a.bookings} /></td>
                         </tr>
                       ) : null
                     ];
@@ -647,4 +618,3 @@ if (!transcript && typeof detail === "object") {
     </div>
   );
 }
-
