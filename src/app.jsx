@@ -432,7 +432,7 @@ export default function App() {
 
                 return new Promise(function(r) { setTimeout(r, 500); }).then(processNextBatch);
               }).catch(function(e) {
-                addLog("  Batch error: " + e.message);
+               addLog("  Batch error: " + (e.message || JSON.stringify(e)));
                 return new Promise(function(r) { setTimeout(r, 1000); }).then(processNextBatch);
               });
             }
