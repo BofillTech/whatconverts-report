@@ -20,8 +20,52 @@ module.exports = async function handler(req, res) {
 
   for (var i = 0; i < transcripts.length; i++) {
     var t = transcripts[i];
-    var transcript = (t.transcript || "").substring(0, 4000);
+    var transcript = (t.transcript || "").substring(0, 5000);
 
+    // FAST CHECK: If transcript contains ### it's a redacted credit card = definite booking
+    var hasRedactedCC = (transcript.match(/###/g) || []).length >= 2;
+
+    if (hasRedactedCC) {
+      // Still send to AI but just for the value and summary
+      try {
+        var ccResponse = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01"
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 300,
+            messages: [{
+              role: "user",
+              content: "This is a confirmed hotel booking call (credit card was given). Read the transcript and extract ONLY the dollar amounts and number of nights.\n\nLook for:\n- Any total amount the agent quoted (e.g. 'total is $473', 'comes to $500', 'that will be $350')\n- Nightly rate (e.g. '$190 a night', '$200 per night')\n- Number of nights\n- Speech-to-text errors are common - 'for 73' might mean '$473', 'total died at' means 'total tied at'\n\nTRANSCRIPT:\n" + transcript + "\n\nRespond with ONLY this JSON, nothing else:\n{\"lead_id\":\"" + t.lead_id + "\",\"classification\":\"BOOKED\",\"estimated_value\":0,\"nights\":0,\"summary\":\"one sentence\"}\n\nRules: Use the highest total quoted. If only a nightly rate, multiply by nights. If nothing found, use 2 x $350 = $700. Value must be above $0."
+            }]
+          })
+        });
+
+        var ccData = await ccResponse.json();
+        if (ccResponse.ok) {
+          var ccText = "";
+          for (var c = 0; c < ccData.content.length; c++) {
+            if (ccData.content[c].type === "text") ccText += ccData.content[c].text;
+          }
+          ccText = ccText.replace(/```json/g, "").replace(/```/g, "").trim();
+          var ccResult = JSON.parse(ccText);
+          ccResult.classification = "BOOKED";
+          if (!ccResult.estimated_value || ccResult.estimated_value <= 0) ccResult.estimated_value = 700;
+          results.push(ccResult);
+        } else {
+          results.push({ lead_id: t.lead_id, classification: "BOOKED", estimated_value: 700, nights: 2, summary: "Credit card provided - booking confirmed" });
+        }
+      } catch (err) {
+        results.push({ lead_id: t.lead_id, classification: "BOOKED", estimated_value: 700, nights: 2, summary: "Credit card provided - booking confirmed" });
+      }
+      continue;
+    }
+
+    // NO ### found - do full analysis
     try {
       var response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -35,7 +79,7 @@ module.exports = async function handler(req, res) {
           max_tokens: 500,
           messages: [{
             role: "user",
-            content: "You are listening to a phone call at \"" + accountName + "\". Read every word of this transcript carefully.\n\nYour ONLY job: did this call result in a booking/reservation, or not?\n\nRead the full transcript below, then tell me:\n1. What did the caller want?\n2. What did the agent/recipient do?\n3. Was a reservation made? Look for: agent taking a name and dates, agent quoting a total, agent saying 'you are all set' or 'booked' or 'confirmed', caller providing credit card info, agent reading back reservation details.\n4. If a dollar amount or rate was mentioned by ANYONE on the call, what was it?\n\nTranscript:\n" + transcript + "\n\nNow classify this call. Respond with ONLY a JSON object, no other text:\n{\"lead_id\":\"" + t.lead_id + "\",\"classification\":\"BOOKED or HIGH_INTENT or INQUIRY or NOT_RELEVANT\",\"estimated_value\":0,\"nights\":0,\"summary\":\"what happened on the call in one sentence\"}\n\nRules:\n- BOOKED = a reservation was made, confirmed, or processed on this call\n- HIGH_INTENT = caller wanted to book but did not finalize (said they would call back, needed to check dates, etc)\n- INQUIRY = general questions, no booking intent\n- NOT_RELEVANT = spam, vendor, wrong number, existing reservation change, robocall\n- For estimated_value: use the exact total if the agent stated one. Otherwise use the nightly rate x nights. If no rate mentioned, use $350/night. If no nights mentioned, assume 2. BOOKED calls must have a value above $0.\n- For charter/tour calls, estimate based on what was discussed."
+            content: "Read this phone call transcript for \"" + accountName + "\". Speech-to-text errors are common so read past misspellings.\n\nTRANSCRIPT:\n" + transcript + "\n\nEND TRANSCRIPT.\n\nAnswer YES or NO to each:\n1. Did the caller give their NAME to the agent?\n2. Did the agent quote a TOTAL dollar amount or nightly rate?\n3. Did the agent CONFIRM a reservation? (phrases like: 'you are all set', 'booked', 'confirmed', 'I have you down for', 'send you a confirmation', 'we will see you')\n4. Did the caller AGREE to book? ('that works', 'lets do it', 'book it', 'sounds good', 'yes', 'go ahead', 'that will work')\n5. Did the caller ask about SPECIFIC DATES for a stay?\n\nClassification rules:\n- If answers 1+3 are both YES, or 1+4 are both YES = BOOKED\n- If answer 3 or 4 is YES even without a name = BOOKED\n- If answer 5 is YES but 3 and 4 are NO = HIGH_INTENT\n- If the call is a vendor, spam, wrong number, robocall, existing reservation question, cancellation, or staff call = NOT_RELEVANT\n- Everything else = INQUIRY\n\nFor value: Use the exact total if one was quoted. Otherwise nightly rate x nights. If no rate mentioned, use $350/night x 2 nights = $700. BOOKED must be above $0.\n\nRespond with ONLY this JSON:\n{\"lead_id\":\"" + t.lead_id + "\",\"classification\":\"BOOKED\",\"estimated_value\":700,\"nights\":2,\"summary\":\"what happened\"}"
           }]
         })
       });
@@ -43,7 +87,7 @@ module.exports = async function handler(req, res) {
       var data = await response.json();
 
       if (!response.ok) {
-        results.push({ lead_id: t.lead_id, classification: "INQUIRY", estimated_value: 0, nights: 0, summary: "API error: " + response.status });
+        results.push({ lead_id: t.lead_id, classification: "INQUIRY", estimated_value: 0, nights: 0, summary: "API error" });
         continue;
       }
 
@@ -54,10 +98,13 @@ module.exports = async function handler(req, res) {
 
       text = text.replace(/```json/g, "").replace(/```/g, "").trim();
       var result = JSON.parse(text);
+      if (result.classification === "BOOKED" && (!result.estimated_value || result.estimated_value <= 0)) {
+        result.estimated_value = 700;
+      }
       results.push(result);
 
     } catch (err) {
-      results.push({ lead_id: t.lead_id, classification: "INQUIRY", estimated_value: 0, nights: 0, summary: "Parse error" });
+      results.push({ lead_id: t.lead_id, classification: "INQUIRY", estimated_value: 0, nights: 0, summary: "Error" });
     }
   }
 
