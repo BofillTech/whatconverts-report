@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import "./App.css";
 
 var API_PROXY = "/api/whatconverts";
@@ -9,24 +9,26 @@ var HOTEL_ACCOUNTS = [
   "Abellona Inn",
   "Archway Fishtown",
   "Atlantic Inn",
-  "Atlantic Oceanfront Motel",
+  "Atlantic Oceanfront",
   "Briney Breezes",
-  "Fun Hog Charters",
+  "Fun Hog",
   "Inn At Highway 1",
   "Little Sur Inn",
   "Montauk Manor",
   "Moonstone Landing",
-  "Mount Nevis Hotel",
+  "Mount Nevis",
   "Old Orchard Beach",
   "Rhumb Line",
-  "Rose Farm Inn",
+  "Rhumbline",
+  "Rose Farm",
   "Sebastians BVI",
   "Sole East",
   "Southampton Inn",
   "Spring House",
   "Surf Lodge",
+  "VBTS",
   "Village by the Sea",
-  "Wavecrest on Ocean",
+  "Wavecrest",
   "White Bay Villas",
   "York Harbor Inn"
 ];
@@ -120,7 +122,18 @@ export default function App() {
   now.setMonth(now.getMonth() - 1);
   var defaultMonth = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2,"0");
 
+  // Default start/end for custom mode (last 30 days)
+  var thirtyAgo = new Date();
+  thirtyAgo.setDate(thirtyAgo.getDate() - 30);
+  var defaultStart = thirtyAgo.toISOString().split("T")[0];
+  var defaultEnd = new Date().toISOString().split("T")[0];
+
+  var [mode, setMode] = useState("portfolio"); // "portfolio" or "client"
   var [month, setMonth] = useState(defaultMonth);
+  var [startDate, setStartDate] = useState(defaultStart);
+  var [endDate, setEndDate] = useState(defaultEnd);
+  var [selectedClient, setSelectedClient] = useState("");
+  var [allAccounts, setAllAccounts] = useState([]);
   var [running, setRunning] = useState(false);
   var [phase, setPhase] = useState("");
   var [log, setLog] = useState([]);
@@ -179,7 +192,6 @@ export default function App() {
     return fetchPage();
   }, [apiFetch]);
 
-  // THIS IS THE KEY FIX - uses /api/lead endpoint directly
   var fetchLeadDetail = useCallback(function(leadId) {
     return fetch(LEAD_URL + "?id=" + leadId).then(function(r) { return r.json(); });
   }, []);
@@ -196,12 +208,193 @@ export default function App() {
         });
       }
       return resp.json();
- }).then(function(data) {
-      if (data.error) { return { error: data.error, results: [] }; }
+    }).then(function(data) {
+      if (data.error) return { error: data.error, results: [] };
       return { results: data.results || [] };
     });
   }, []);
 
+  // Load accounts on mount for the client dropdown
+  useEffect(function() {
+    fetchAllPages("accounts", { accounts_per_page: 50 }, "accounts").then(function(accts) {
+      var hotels = accts.filter(function(a) { return isHotelAccount(a.account_name || ""); });
+      hotels.sort(function(a, b) { return (a.account_name || "").localeCompare(b.account_name || ""); });
+      setAllAccounts(hotels);
+    }).catch(function() {});
+  }, [fetchAllPages]);
+
+  // Process a single account
+  function processAccount(acct, dateStart, dateEnd) {
+    var name = acct.account_name || "Account " + acct.account_id;
+    addLog("Processing: " + name);
+
+    var totals = {
+      account_name: name,
+      account_id: acct.account_id,
+      total_calls: 0, booked: 0, high_intent: 0, total_value: 0,
+      google_ads_calls: 0, google_ads_booked: 0, google_ads_high_intent: 0, google_ads_value: 0,
+      bookings: [], leads_to_analyze: []
+    };
+
+    var profiles = acct.profiles || [];
+    var profileIndex = 0;
+
+    function processNextProfile() {
+      if (profileIndex >= profiles.length || abortRef.current) return Promise.resolve(totals);
+      var profile = profiles[profileIndex];
+      profileIndex++;
+
+      return fetchAllPages("leads", {
+        lead_type: "phone_call", start_date: dateStart, end_date: dateEnd,
+        leads_per_page: 250, account_id: acct.account_id, profile_id: profile.profile_id
+      }, "leads").then(function(leads) {
+        addLog("  " + (profile.profile_name || "Profile") + ": " + leads.length + " calls");
+        totals.total_calls += leads.length;
+
+        leads.forEach(function(lead) {
+          if (lead.spam || lead.duplicate) return;
+          var gads = isGoogleAds(lead);
+          if (gads) totals.google_ads_calls++;
+
+          var fieldResult = classifyFromFields(lead);
+          if (fieldResult.isBooking) {
+            totals.booked++;
+            totals.total_value += fieldResult.value;
+            if (gads) { totals.google_ads_booked++; totals.google_ads_value += fieldResult.value; }
+            totals.bookings.push({
+              lead_id: lead.lead_id, date: lead.date_created || "", value: fieldResult.value,
+              method: fieldResult.method, classification: "BOOKED",
+              source: lead.lead_source || "", medium: lead.lead_medium || "",
+              campaign: lead.lead_campaign || "", summary: "From " + fieldResult.method,
+              is_google_ads: gads
+            });
+            return;
+          }
+
+          var duration = parseInt(lead.call_duration_seconds) || 0;
+          if (duration >= MIN_CALL_DURATION) {
+            totals.leads_to_analyze.push({
+              lead_id: lead.lead_id, date: lead.date_created || "",
+              source: lead.lead_source || "", medium: lead.lead_medium || "",
+              campaign: lead.lead_campaign || "", duration: duration, is_google_ads: gads
+            });
+          }
+        });
+
+        return processNextProfile();
+      }).catch(function(e) {
+        addLog("  Error: " + e.message);
+        return processNextProfile();
+      });
+    }
+
+    return processNextProfile();
+  }
+
+  // Fetch transcripts and analyze for one account
+  function analyzeAccount(acct) {
+    var leadsToAnalyze = acct.leads_to_analyze;
+    if (!leadsToAnalyze || !leadsToAnalyze.length) return Promise.resolve();
+
+    addLog("Fetching transcripts: " + acct.account_name + " (" + leadsToAnalyze.length + " calls)");
+    setPhase("Transcripts: " + acct.account_name);
+
+    var transcriptsForAI = [];
+    var leadIdx = 0;
+
+    function fetchNextTranscript() {
+      if (leadIdx >= leadsToAnalyze.length || abortRef.current) return Promise.resolve();
+      var lead = leadsToAnalyze[leadIdx];
+      leadIdx++;
+      setProgress({ current: leadIdx, total: leadsToAnalyze.length, account: acct.account_name + " (transcripts)" });
+
+      return fetchLeadDetail(lead.lead_id).then(function(detail) {
+        var transcript = "";
+        var tryFields = ["call_transcription", "call_transcript", "transcript", "transcription"];
+        for (var i = 0; i < tryFields.length; i++) {
+          if (detail[tryFields[i]] && typeof detail[tryFields[i]] === "string" && detail[tryFields[i]].length > 20) {
+            transcript = detail[tryFields[i]];
+            break;
+          }
+        }
+        if (!transcript) {
+          Object.keys(detail).forEach(function(k) {
+            if (!transcript && typeof detail[k] === "string" && detail[k].length > 80 &&
+                k !== "lead_url" && k !== "landing_url" && k !== "recording_url" && k !== "recording") {
+              transcript = detail[k];
+            }
+          });
+        }
+
+        if (transcript && transcript.length > 30) {
+          transcriptsForAI.push({
+            lead_id: String(lead.lead_id), transcript: transcript,
+            date: lead.date, source: lead.source, medium: lead.medium,
+            campaign: lead.campaign, is_google_ads: lead.is_google_ads
+          });
+        }
+        return new Promise(function(r) { setTimeout(r, 120); }).then(fetchNextTranscript);
+      }).catch(function() {
+        return new Promise(function(r) { setTimeout(r, 120); }).then(fetchNextTranscript);
+      });
+    }
+
+    return fetchNextTranscript().then(function() {
+      addLog("  Got " + transcriptsForAI.length + " transcripts out of " + leadsToAnalyze.length + " calls");
+      if (!transcriptsForAI.length) return;
+
+      setPhase("AI analyzing: " + acct.account_name);
+      var batchIdx = 0;
+
+      function processNextBatch() {
+        if (batchIdx >= transcriptsForAI.length || abortRef.current) return Promise.resolve();
+        var batch = transcriptsForAI.slice(batchIdx, batchIdx + 5);
+        batchIdx += batch.length;
+        addLog("  Analyzing batch " + Math.ceil(batchIdx / 5) + "...");
+
+        return analyzeTranscripts(batch, acct.account_name).then(function(resp) {
+          if (resp.error) addLog("  API ERROR: " + String(resp.error).substring(0, 200));
+          var aiResults = resp.results || [];
+
+          aiResults.forEach(function(r) {
+            if (r.classification === "BOOKED" || r.classification === "HIGH_INTENT") {
+              var original = transcriptsForAI.find(function(t) { return String(t.lead_id) === String(r.lead_id); });
+              if (!original) return;
+              var val = parseFloat(r.estimated_value) || 0;
+
+              if (r.classification === "BOOKED") {
+                acct.booked++;
+                acct.total_value += val;
+                if (original.is_google_ads) { acct.google_ads_booked++; acct.google_ads_value += val; }
+              } else {
+                acct.high_intent++;
+                if (original.is_google_ads) acct.google_ads_high_intent++;
+              }
+
+              acct.bookings.push({
+                lead_id: r.lead_id, date: original.date, value: val,
+                method: "ai_transcript", classification: r.classification,
+                source: original.source, medium: original.medium,
+                campaign: original.campaign, summary: r.summary || "",
+                is_google_ads: original.is_google_ads
+              });
+            }
+          });
+
+          return new Promise(function(r) { setTimeout(r, 500); }).then(processNextBatch);
+        }).catch(function(e) {
+          addLog("  Batch error: " + (e.message || JSON.stringify(e)));
+          return new Promise(function(r) { setTimeout(r, 1000); }).then(processNextBatch);
+        });
+      }
+
+      return processNextBatch().then(function() {
+        addLog("  Result: " + acct.booked + " booked, " + acct.high_intent + " high-intent, " + fmt(acct.total_value));
+      });
+    });
+  }
+
+  // ── MAIN REPORT ──
   var runReport = useCallback(function() {
     setRunning(true);
     setError(null);
@@ -210,91 +403,54 @@ export default function App() {
     setExpanded({});
     abortRef.current = false;
 
-    var range = getMonthRange(month);
-    addLog("Starting report for " + range.label);
-    addLog("Filtering to hotel accounts (" + HOTEL_ACCOUNTS.length + " properties)");
+    var dateStart, dateEnd, dateLabel;
+
+    if (mode === "client") {
+      dateStart = startDate;
+      dateEnd = endDate;
+      dateLabel = startDate + " to " + endDate;
+    } else {
+      var range = getMonthRange(month);
+      dateStart = range.start;
+      dateEnd = range.end;
+      dateLabel = range.label;
+    }
+
+    addLog("Report: " + dateLabel);
+
+    if (mode === "client" && !selectedClient) {
+      setError("Please select a client");
+      setRunning(false);
+      return;
+    }
+
     setPhase("Pulling call data...");
-
     addLog("Fetching accounts...");
-    fetchAllPages("accounts", { accounts_per_page: 50 }, "accounts").then(function(allAccounts) {
-      var accounts = allAccounts.filter(function(a) { return isHotelAccount(a.account_name || ""); });
-      // Sort alphabetically
-      accounts.sort(function(a, b) { return (a.account_name || "").localeCompare(b.account_name || ""); });
-      addLog("Found " + allAccounts.length + " total, " + accounts.length + " hotel accounts");
-      setProgress({ current: 0, total: accounts.length, account: "" });
 
+    fetchAllPages("accounts", { accounts_per_page: 50 }, "accounts").then(function(accts) {
+      var accounts;
+      if (mode === "client") {
+        accounts = accts.filter(function(a) {
+          return (a.account_name || "").toLowerCase().includes(selectedClient.toLowerCase());
+        });
+        addLog("Single client mode: " + selectedClient + " (" + accounts.length + " matched)");
+      } else {
+        accounts = accts.filter(function(a) { return isHotelAccount(a.account_name || ""); });
+        accounts.sort(function(a, b) { return (a.account_name || "").localeCompare(b.account_name || ""); });
+        addLog("Portfolio mode: " + accounts.length + " hotel accounts");
+      }
+
+      setProgress({ current: 0, total: accounts.length, account: "" });
       var reportData = [];
       var accountIndex = 0;
 
       function processNextAccount() {
         if (accountIndex >= accounts.length || abortRef.current) return Promise.resolve();
-
         var acct = accounts[accountIndex];
-        var name = acct.account_name || "Account " + acct.account_id;
-        setProgress({ current: accountIndex + 1, total: accounts.length, account: name });
-        addLog("[" + (accountIndex + 1) + "/" + accounts.length + "] " + name);
+        setProgress({ current: accountIndex + 1, total: accounts.length, account: acct.account_name || "" });
+        addLog("[" + (accountIndex + 1) + "/" + accounts.length + "] " + (acct.account_name || ""));
 
-        var totals = {
-          account_name: name,
-          account_id: acct.account_id,
-          total_calls: 0, booked: 0, high_intent: 0, total_value: 0,
-          google_ads_calls: 0, google_ads_booked: 0, google_ads_high_intent: 0, google_ads_value: 0,
-          bookings: [], leads_to_analyze: []
-        };
-
-        var profiles = acct.profiles || [];
-        var profileIndex = 0;
-
-        function processNextProfile() {
-          if (profileIndex >= profiles.length || abortRef.current) return Promise.resolve();
-          var profile = profiles[profileIndex];
-          profileIndex++;
-
-          return fetchAllPages("leads", {
-            lead_type: "phone_call", start_date: range.start, end_date: range.end,
-            leads_per_page: 250, account_id: acct.account_id, profile_id: profile.profile_id
-          }, "leads").then(function(leads) {
-            addLog("  " + (profile.profile_name || "Profile") + ": " + leads.length + " calls");
-            totals.total_calls += leads.length;
-
-            leads.forEach(function(lead) {
-              if (lead.spam || lead.duplicate) return;
-              var gads = isGoogleAds(lead);
-              if (gads) totals.google_ads_calls++;
-
-              var fieldResult = classifyFromFields(lead);
-              if (fieldResult.isBooking) {
-                totals.booked++;
-                totals.total_value += fieldResult.value;
-                if (gads) { totals.google_ads_booked++; totals.google_ads_value += fieldResult.value; }
-                totals.bookings.push({
-                  lead_id: lead.lead_id, date: lead.date_created || "", value: fieldResult.value,
-                  method: fieldResult.method, classification: "BOOKED",
-                  source: lead.lead_source || "", medium: lead.lead_medium || "",
-                  campaign: lead.lead_campaign || "", summary: "From " + fieldResult.method,
-                  is_google_ads: gads
-                });
-                return;
-              }
-
-              var duration = parseInt(lead.call_duration_seconds) || 0;
-              if (duration >= MIN_CALL_DURATION) {
-                totals.leads_to_analyze.push({
-                  lead_id: lead.lead_id, date: lead.date_created || "",
-                  source: lead.lead_source || "", medium: lead.lead_medium || "",
-                  campaign: lead.lead_campaign || "", duration: duration, is_google_ads: gads
-                });
-              }
-            });
-
-            return processNextProfile();
-          }).catch(function(e) {
-            addLog("  Error: " + e.message);
-            return processNextProfile();
-          });
-        }
-
-        return processNextProfile().then(function() {
+        return processAccount(acct, dateStart, dateEnd).then(function(totals) {
           reportData.push(totals);
           addLog("  -> " + totals.total_calls + " calls, " + totals.leads_to_analyze.length + " queued for AI");
           accountIndex++;
@@ -303,11 +459,10 @@ export default function App() {
       }
 
       return processNextAccount().then(function() {
-        setPhase("Fetching transcripts & analyzing...");
-        var totalToAnalyze = 0;
-        reportData.forEach(function(a) { totalToAnalyze += a.leads_to_analyze.length; });
         addLog("");
         addLog("=== TRANSCRIPT FETCH & AI ANALYSIS ===");
+        var totalToAnalyze = 0;
+        reportData.forEach(function(a) { totalToAnalyze += (a.leads_to_analyze || []).length; });
         addLog("Total leads to analyze: " + totalToAnalyze);
 
         if (totalToAnalyze === 0) {
@@ -316,143 +471,26 @@ export default function App() {
         }
 
         var acctIdx = 0;
-        var globalFetched = 0;
-
-        function processNextAccountTranscripts() {
+        function analyzeNextAccount() {
           if (acctIdx >= reportData.length || abortRef.current) return Promise.resolve();
-
           var acct = reportData[acctIdx];
-          var leadsToAnalyze = acct.leads_to_analyze;
           acctIdx++;
-
-          if (!leadsToAnalyze.length) return processNextAccountTranscripts();
-
-          addLog("Fetching transcripts: " + acct.account_name + " (" + leadsToAnalyze.length + " calls)");
-          setPhase("Transcripts: " + acct.account_name);
-
-          var transcriptsForAI = [];
-          var leadIdx = 0;
-
-          function fetchNextTranscript() {
-            if (leadIdx >= leadsToAnalyze.length || abortRef.current) return Promise.resolve();
-
-            var lead = leadsToAnalyze[leadIdx];
-            leadIdx++;
-            globalFetched++;
-            setProgress({ current: globalFetched, total: totalToAnalyze, account: acct.account_name + " (transcripts)" });
-
-            return fetchLeadDetail(lead.lead_id).then(function(detail) {
-              // Log fields for first lead of first account to debug
-              if (globalFetched === 1) {
-                addLog("  DEBUG lead fields: " + Object.keys(detail).join(", "));
-                // Log any string field longer than 40 chars
-                Object.keys(detail).forEach(function(k) {
-                  if (typeof detail[k] === "string" && detail[k].length > 40) {
-                    addLog("  DEBUG " + k + ": " + detail[k].substring(0, 80) + "...");
-                  }
-                });
-              }
-
-              // Try every possible transcript field name
-              var transcript = "";
-              var tryFields = ["call_transcription", "call_transcript", "transcript", "transcription", "recording_transcription"];
-              for (var i = 0; i < tryFields.length; i++) {
-                if (detail[tryFields[i]] && typeof detail[tryFields[i]] === "string" && detail[tryFields[i]].length > 20) {
-                  transcript = detail[tryFields[i]];
-                  if (globalFetched === 1) addLog("  DEBUG found transcript in: " + tryFields[i]);
-                  break;
-                }
-              }
-
-              // Fallback: check any long string field
-              if (!transcript) {
-                Object.keys(detail).forEach(function(k) {
-                  if (!transcript && typeof detail[k] === "string" && detail[k].length > 80 &&
-                      k !== "lead_url" && k !== "landing_url" && k !== "recording_url" && k !== "recording") {
-                    transcript = detail[k];
-                    if (globalFetched === 1) addLog("  DEBUG fallback transcript in: " + k);
-                  }
-                });
-              }
-
-              if (transcript && transcript.length > 30) {
-                transcriptsForAI.push({
-                  lead_id: String(lead.lead_id), transcript: transcript,
-                  date: lead.date, source: lead.source, medium: lead.medium,
-                  campaign: lead.campaign, is_google_ads: lead.is_google_ads
-                });
-              }
-
-              return new Promise(function(r) { setTimeout(r, 120); }).then(fetchNextTranscript);
-            }).catch(function(e) {
-              if (globalFetched === 1) addLog("  DEBUG fetch error: " + e.message);
-              return new Promise(function(r) { setTimeout(r, 120); }).then(fetchNextTranscript);
-            });
-          }
-
-          return fetchNextTranscript().then(function() {
-            addLog("  Got " + transcriptsForAI.length + " transcripts out of " + leadsToAnalyze.length + " calls");
-
-            if (!transcriptsForAI.length) return processNextAccountTranscripts();
-
-            setPhase("AI analyzing: " + acct.account_name);
-            var batchIdx = 0;
-
-            function processNextBatch() {
-              if (batchIdx >= transcriptsForAI.length || abortRef.current) return Promise.resolve();
-
-              var batch = transcriptsForAI.slice(batchIdx, batchIdx + 10);
-              batchIdx += batch.length;
-              addLog("  Analyzing batch " + Math.ceil(batchIdx / 10) + "...");
-
-              return analyzeTranscripts(batch, acct.account_name).then(function(resp) {
-                if (resp.error) addLog("  API ERROR: " + String(resp.error).substring(0, 200));
-                var aiResults = resp.results || [];
-                aiResults.forEach(function(r) {
-                  if (r.classification === "BOOKED" || r.classification === "HIGH_INTENT") {
-                    var original = transcriptsForAI.find(function(t) { return String(t.lead_id) === String(r.lead_id); });
-                    if (!original) return;
-                    var val = parseFloat(r.estimated_value) || 0;
-
-                    if (r.classification === "BOOKED") {
-                      acct.booked++;
-                      acct.total_value += val;
-                      if (original.is_google_ads) { acct.google_ads_booked++; acct.google_ads_value += val; }
-                    } else {
-                      acct.high_intent++;
-                      if (original.is_google_ads) acct.google_ads_high_intent++;
-                    }
-
-                    acct.bookings.push({
-                      lead_id: r.lead_id, date: original.date, value: val,
-                      method: "ai_transcript", classification: r.classification,
-                      source: original.source, medium: original.medium,
-                      campaign: original.campaign, summary: r.summary || "",
-                      is_google_ads: original.is_google_ads
-                    });
-                  }
-                });
-
-                return new Promise(function(r) { setTimeout(r, 500); }).then(processNextBatch);
-              }).catch(function(e) {
-               addLog("  Batch error: " + (e.message || JSON.stringify(e)));
-                return new Promise(function(r) { setTimeout(r, 1000); }).then(processNextBatch);
-              });
-            }
-
-            return processNextBatch().then(function() {
-              addLog("  Result: " + acct.booked + " booked, " + acct.high_intent + " high-intent");
-              return processNextAccountTranscripts();
-            });
-          });
+          return analyzeAccount(acct).then(analyzeNextAccount);
         }
 
-        return processNextAccountTranscripts().then(function() { return reportData; });
+        return analyzeNextAccount().then(function() { return reportData; });
       });
     }).then(function(reportData) {
-      // Sort alphabetically
-      reportData.sort(function(a, b) { return (a.account_name || "").localeCompare(b.account_name || ""); });
-      setResults({ data: reportData, month: getMonthRange(month).label });
+      if (mode !== "client") {
+        reportData.sort(function(a, b) { return (a.account_name || "").localeCompare(b.account_name || ""); });
+      }
+      var dateStart2, dateEnd2, dateLabel2;
+      if (mode === "client") {
+        dateLabel2 = selectedClient + " — " + startDate + " to " + endDate;
+      } else {
+        dateLabel2 = getMonthRange(month).label;
+      }
+      setResults({ data: reportData, month: dateLabel2, mode: mode });
       setPhase("");
       addLog("Done!");
     }).catch(function(e) {
@@ -462,7 +500,7 @@ export default function App() {
     }).finally(function() {
       setRunning(false);
     });
-  }, [month, addLog, fetchAllPages, fetchLeadDetail, analyzeTranscripts]);
+  }, [mode, month, startDate, endDate, selectedClient, addLog, fetchAllPages, fetchLeadDetail, analyzeTranscripts]);
 
   var exportCSV = useCallback(function() {
     if (!results) return;
@@ -474,8 +512,8 @@ export default function App() {
     var csv = rows.map(function(r) { return r.map(function(c) { return '"' + c + '"'; }).join(","); }).join("\n");
     var blob = new Blob([csv], { type: "text/csv" });
     var a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-    a.download = "call_bookings_" + month + ".csv"; a.click();
-  }, [results, month]);
+    a.download = "call_bookings.csv"; a.click();
+  }, [results]);
 
   var exportDetailCSV = useCallback(function() {
     if (!results) return;
@@ -488,8 +526,8 @@ export default function App() {
     var csv = rows.map(function(r) { return r.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(","); }).join("\n");
     var blob = new Blob([csv], { type: "text/csv" });
     var a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-    a.download = "call_bookings_detail_" + month + ".csv"; a.click();
-  }, [results, month]);
+    a.download = "call_bookings_detail.csv"; a.click();
+  }, [results]);
 
   var grand = results ? results.data.reduce(function(t, a) {
     return { calls: t.calls + a.total_calls, booked: t.booked + a.booked, highIntent: t.highIntent + a.high_intent,
@@ -507,17 +545,51 @@ export default function App() {
           </svg>
           <div>
             <h1>Call Booking Report</h1>
-            <p>AI-powered phone booking analysis — hotel accounts</p>
+            <p>AI-powered phone booking analysis</p>
           </div>
         </div>
       </header>
 
+      {/* Mode tabs */}
+      <div className="mode-tabs">
+        <button className={"mode-tab " + (mode === "portfolio" ? "active" : "")} onClick={function() { setMode("portfolio"); setResults(null); }}>
+          All Hotels (Monthly)
+        </button>
+        <button className={"mode-tab " + (mode === "client" ? "active" : "")} onClick={function() { setMode("client"); setResults(null); }}>
+          Single Client (Custom Dates)
+        </button>
+      </div>
+
+      {/* Controls */}
       <div className="controls">
         <div className="control-row">
-          <div className="field">
-            <label>Report Month</label>
-            <input type="month" value={month} onChange={function(e) { setMonth(e.target.value); }} />
-          </div>
+          {mode === "portfolio" ? (
+            <div className="field">
+              <label>Report Month</label>
+              <input type="month" value={month} onChange={function(e) { setMonth(e.target.value); }} />
+            </div>
+          ) : (
+            <>
+              <div className="field">
+                <label>Client</label>
+                <select value={selectedClient} onChange={function(e) { setSelectedClient(e.target.value); }}
+                  style={{ padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: "6px", fontSize: "13px", fontFamily: "inherit", minWidth: "200px" }}>
+                  <option value="">Select a client...</option>
+                  {allAccounts.map(function(a) {
+                    return <option key={a.account_id} value={a.account_name}>{a.account_name}</option>;
+                  })}
+                </select>
+              </div>
+              <div className="field">
+                <label>Start Date</label>
+                <input type="date" value={startDate} onChange={function(e) { setStartDate(e.target.value); }} />
+              </div>
+              <div className="field">
+                <label>End Date</label>
+                <input type="date" value={endDate} onChange={function(e) { setEndDate(e.target.value); }} />
+              </div>
+            </>
+          )}
           <div className="buttons">
             <button className="btn-primary" onClick={runReport} disabled={running}>
               {running ? phase || "Processing..." : "Run Report"}
@@ -554,8 +626,8 @@ export default function App() {
 
           <div className="table-container">
             <div className="table-header">
-              <h2>By Client — {results.month}</h2>
-              <span className="table-meta">{results.data.filter(function(a) { return a.total_calls > 0; }).length} active hotels</span>
+              <h2>{results.month}</h2>
+              <span className="table-meta">{results.data.filter(function(a) { return a.total_calls > 0; }).length} active {results.mode === "client" ? "profiles" : "hotels"}</span>
             </div>
             <div className="table-scroll">
               <table>
