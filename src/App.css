@@ -265,3 +265,29 @@ tr:hover { background: #f3f4f6; }
   .stats-grid, .stats-grid.four { grid-template-columns: 1fr; }
 }
 
+/* Mode tabs */
+.mode-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 16px;
+  border-bottom: 2px solid #e5e7eb;
+}
+.mode-tab {
+  padding: 10px 24px;
+  background: none;
+  border: none;
+  font-size: 14px;
+  font-weight: 500;
+  color: #6b7280;
+  cursor: pointer;
+  font-family: inherit;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: all 0.15s;
+}
+.mode-tab:hover { color: #1a1a2e; }
+.mode-tab.active {
+  color: #0f4c75;
+  border-bottom-color: #0f4c75;
+  font-weight: 600;
+}
