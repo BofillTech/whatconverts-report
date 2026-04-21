@@ -291,3 +291,26 @@ tr:hover { background: #f3f4f6; }
   border-bottom-color: #0f4c75;
   font-weight: 600;
 }
+/* Print / PDF styles */
+@media print {
+  body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .app { max-width: 100%; padding: 0; }
+  .header { margin-bottom: 16px; }
+  .controls, .mode-tabs, .btn-primary, .btn-cancel, .btn-export, .expand-btn,
+  .progress-wrap, .error-box, .log-section { display: none !important; }
+  .stats-grid, .stats-grid.four { grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+  .stat-card { padding: 12px; border: 1px solid #ccc; }
+  .stat-value { font-size: 22px; }
+  .stat-sub { font-size: 11px; }
+  .table-container { border: 1px solid #ccc; }
+  .table-header { padding: 10px 16px; }
+  table { font-size: 12px; }
+  th, td { padding: 6px 10px; }
+  .detail-row { display: table-row !important; }
+  .detail-table-wrap { padding: 8px 16px; }
+  .detail-table { font-size: 11px; }
+  .no-activity { font-size: 11px; padding: 8px 14px; }
+  .logo h1 { font-size: 18px; }
+  .logo p { font-size: 11px; }
+  @page { margin: 0.5in; size: landscape; }
+}
