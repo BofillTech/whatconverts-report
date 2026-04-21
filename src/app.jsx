@@ -122,13 +122,12 @@ export default function App() {
   now.setMonth(now.getMonth() - 1);
   var defaultMonth = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2,"0");
 
-  // Default start/end for custom mode (last 30 days)
   var thirtyAgo = new Date();
   thirtyAgo.setDate(thirtyAgo.getDate() - 30);
   var defaultStart = thirtyAgo.toISOString().split("T")[0];
   var defaultEnd = new Date().toISOString().split("T")[0];
 
-  var [mode, setMode] = useState("portfolio"); // "portfolio" or "client"
+  var [mode, setMode] = useState("portfolio");
   var [month, setMonth] = useState(defaultMonth);
   var [startDate, setStartDate] = useState(defaultStart);
   var [endDate, setEndDate] = useState(defaultEnd);
@@ -214,7 +213,6 @@ export default function App() {
     });
   }, []);
 
-  // Load accounts on mount for the client dropdown
   useEffect(function() {
     fetchAllPages("accounts", { accounts_per_page: 50 }, "accounts").then(function(accts) {
       var hotels = accts.filter(function(a) { return isHotelAccount(a.account_name || ""); });
@@ -223,39 +221,31 @@ export default function App() {
     }).catch(function() {});
   }, [fetchAllPages]);
 
-  // Process a single account
   function processAccount(acct, dateStart, dateEnd) {
     var name = acct.account_name || "Account " + acct.account_id;
     addLog("Processing: " + name);
-
     var totals = {
-      account_name: name,
-      account_id: acct.account_id,
+      account_name: name, account_id: acct.account_id,
       total_calls: 0, booked: 0, high_intent: 0, total_value: 0,
       google_ads_calls: 0, google_ads_booked: 0, google_ads_high_intent: 0, google_ads_value: 0,
       bookings: [], leads_to_analyze: []
     };
-
     var profiles = acct.profiles || [];
     var profileIndex = 0;
-
     function processNextProfile() {
       if (profileIndex >= profiles.length || abortRef.current) return Promise.resolve(totals);
       var profile = profiles[profileIndex];
       profileIndex++;
-
       return fetchAllPages("leads", {
         lead_type: "phone_call", start_date: dateStart, end_date: dateEnd,
         leads_per_page: 250, account_id: acct.account_id, profile_id: profile.profile_id
       }, "leads").then(function(leads) {
         addLog("  " + (profile.profile_name || "Profile") + ": " + leads.length + " calls");
         totals.total_calls += leads.length;
-
         leads.forEach(function(lead) {
           if (lead.spam || lead.duplicate) return;
           var gads = isGoogleAds(lead);
           if (gads) totals.google_ads_calls++;
-
           var fieldResult = classifyFromFields(lead);
           if (fieldResult.isBooking) {
             totals.booked++;
@@ -270,7 +260,6 @@ export default function App() {
             });
             return;
           }
-
           var duration = parseInt(lead.call_duration_seconds) || 0;
           if (duration >= MIN_CALL_DURATION) {
             totals.leads_to_analyze.push({
@@ -280,34 +269,27 @@ export default function App() {
             });
           }
         });
-
         return processNextProfile();
       }).catch(function(e) {
         addLog("  Error: " + e.message);
         return processNextProfile();
       });
     }
-
     return processNextProfile();
   }
 
-  // Fetch transcripts and analyze for one account
   function analyzeAccount(acct) {
     var leadsToAnalyze = acct.leads_to_analyze;
     if (!leadsToAnalyze || !leadsToAnalyze.length) return Promise.resolve();
-
     addLog("Fetching transcripts: " + acct.account_name + " (" + leadsToAnalyze.length + " calls)");
     setPhase("Transcripts: " + acct.account_name);
-
     var transcriptsForAI = [];
     var leadIdx = 0;
-
     function fetchNextTranscript() {
       if (leadIdx >= leadsToAnalyze.length || abortRef.current) return Promise.resolve();
       var lead = leadsToAnalyze[leadIdx];
       leadIdx++;
       setProgress({ current: leadIdx, total: leadsToAnalyze.length, account: acct.account_name + " (transcripts)" });
-
       return fetchLeadDetail(lead.lead_id).then(function(detail) {
         var transcript = "";
         var tryFields = ["call_transcription", "call_transcript", "transcript", "transcription"];
@@ -325,7 +307,6 @@ export default function App() {
             }
           });
         }
-
         if (transcript && transcript.length > 30) {
           transcriptsForAI.push({
             lead_id: String(lead.lead_id), transcript: transcript,
@@ -338,30 +319,24 @@ export default function App() {
         return new Promise(function(r) { setTimeout(r, 120); }).then(fetchNextTranscript);
       });
     }
-
     return fetchNextTranscript().then(function() {
       addLog("  Got " + transcriptsForAI.length + " transcripts out of " + leadsToAnalyze.length + " calls");
       if (!transcriptsForAI.length) return;
-
       setPhase("AI analyzing: " + acct.account_name);
       var batchIdx = 0;
-
       function processNextBatch() {
         if (batchIdx >= transcriptsForAI.length || abortRef.current) return Promise.resolve();
         var batch = transcriptsForAI.slice(batchIdx, batchIdx + 5);
         batchIdx += batch.length;
         addLog("  Analyzing batch " + Math.ceil(batchIdx / 5) + "...");
-
         return analyzeTranscripts(batch, acct.account_name).then(function(resp) {
           if (resp.error) addLog("  API ERROR: " + String(resp.error).substring(0, 200));
           var aiResults = resp.results || [];
-
           aiResults.forEach(function(r) {
             if (r.classification === "BOOKED" || r.classification === "HIGH_INTENT") {
               var original = transcriptsForAI.find(function(t) { return String(t.lead_id) === String(r.lead_id); });
               if (!original) return;
               var val = parseFloat(r.estimated_value) || 0;
-
               if (r.classification === "BOOKED") {
                 acct.booked++;
                 acct.total_value += val;
@@ -370,7 +345,6 @@ export default function App() {
                 acct.high_intent++;
                 if (original.is_google_ads) acct.google_ads_high_intent++;
               }
-
               acct.bookings.push({
                 lead_id: r.lead_id, date: original.date, value: val,
                 method: "ai_transcript", classification: r.classification,
@@ -380,21 +354,18 @@ export default function App() {
               });
             }
           });
-
           return new Promise(function(r) { setTimeout(r, 500); }).then(processNextBatch);
         }).catch(function(e) {
           addLog("  Batch error: " + (e.message || JSON.stringify(e)));
           return new Promise(function(r) { setTimeout(r, 1000); }).then(processNextBatch);
         });
       }
-
       return processNextBatch().then(function() {
         addLog("  Result: " + acct.booked + " booked, " + acct.high_intent + " high-intent, " + fmt(acct.total_value));
       });
     });
   }
 
-  // ── MAIN REPORT ──
   var runReport = useCallback(function() {
     setRunning(true);
     setError(null);
@@ -402,9 +373,7 @@ export default function App() {
     setLog([]);
     setExpanded({});
     abortRef.current = false;
-
     var dateStart, dateEnd, dateLabel;
-
     if (mode === "client") {
       dateStart = startDate;
       dateEnd = endDate;
@@ -415,18 +384,14 @@ export default function App() {
       dateEnd = range.end;
       dateLabel = range.label;
     }
-
     addLog("Report: " + dateLabel);
-
     if (mode === "client" && !selectedClient) {
       setError("Please select a client");
       setRunning(false);
       return;
     }
-
     setPhase("Pulling call data...");
     addLog("Fetching accounts...");
-
     fetchAllPages("accounts", { accounts_per_page: 50 }, "accounts").then(function(accts) {
       var accounts;
       if (mode === "client") {
@@ -439,17 +404,14 @@ export default function App() {
         accounts.sort(function(a, b) { return (a.account_name || "").localeCompare(b.account_name || ""); });
         addLog("Portfolio mode: " + accounts.length + " hotel accounts");
       }
-
       setProgress({ current: 0, total: accounts.length, account: "" });
       var reportData = [];
       var accountIndex = 0;
-
       function processNextAccount() {
         if (accountIndex >= accounts.length || abortRef.current) return Promise.resolve();
         var acct = accounts[accountIndex];
         setProgress({ current: accountIndex + 1, total: accounts.length, account: acct.account_name || "" });
         addLog("[" + (accountIndex + 1) + "/" + accounts.length + "] " + (acct.account_name || ""));
-
         return processAccount(acct, dateStart, dateEnd).then(function(totals) {
           reportData.push(totals);
           addLog("  -> " + totals.total_calls + " calls, " + totals.leads_to_analyze.length + " queued for AI");
@@ -457,19 +419,16 @@ export default function App() {
           return processNextAccount();
         });
       }
-
       return processNextAccount().then(function() {
         addLog("");
         addLog("=== TRANSCRIPT FETCH & AI ANALYSIS ===");
         var totalToAnalyze = 0;
         reportData.forEach(function(a) { totalToAnalyze += (a.leads_to_analyze || []).length; });
         addLog("Total leads to analyze: " + totalToAnalyze);
-
         if (totalToAnalyze === 0) {
           addLog("No qualifying calls found");
           return reportData;
         }
-
         var acctIdx = 0;
         function analyzeNextAccount() {
           if (acctIdx >= reportData.length || abortRef.current) return Promise.resolve();
@@ -477,14 +436,13 @@ export default function App() {
           acctIdx++;
           return analyzeAccount(acct).then(analyzeNextAccount);
         }
-
         return analyzeNextAccount().then(function() { return reportData; });
       });
     }).then(function(reportData) {
       if (mode !== "client") {
         reportData.sort(function(a, b) { return (a.account_name || "").localeCompare(b.account_name || ""); });
       }
-      var dateStart2, dateEnd2, dateLabel2;
+      var dateLabel2;
       if (mode === "client") {
         dateLabel2 = selectedClient + " — " + startDate + " to " + endDate;
       } else {
@@ -545,23 +503,18 @@ export default function App() {
           </svg>
           <div>
             <h1>Call Booking Report</h1>
-            <p>AI-powered phone booking analysis</p>
+            <p className="no-print">AI-powered phone booking analysis</p>
+            {results && <p className="only-print" style={{fontSize:"13px",color:"#6b7280",marginTop:"2px"}}>{results.month}</p>}
           </div>
         </div>
       </header>
 
-      {/* Mode tabs */}
-      <div className="mode-tabs">
-        <button className={"mode-tab " + (mode === "portfolio" ? "active" : "")} onClick={function() { setMode("portfolio"); setResults(null); }}>
-          All Hotels (Monthly)
-        </button>
-        <button className={"mode-tab " + (mode === "client" ? "active" : "")} onClick={function() { setMode("client"); setResults(null); }}>
-          Single Client (Custom Dates)
-        </button>
+      <div className="mode-tabs no-print">
+        <button className={"mode-tab " + (mode === "portfolio" ? "active" : "")} onClick={function() { setMode("portfolio"); setResults(null); }}>All Hotels (Monthly)</button>
+        <button className={"mode-tab " + (mode === "client" ? "active" : "")} onClick={function() { setMode("client"); setResults(null); }}>Single Client (Custom Dates)</button>
       </div>
 
-      {/* Controls */}
-      <div className="controls">
+      <div className="controls no-print">
         <div className="control-row">
           {mode === "portfolio" ? (
             <div className="field">
@@ -597,12 +550,13 @@ export default function App() {
             {running && <button className="btn-cancel" onClick={function() { abortRef.current = true; }}>Cancel</button>}
             {results && <button className="btn-export" onClick={exportCSV}>Summary CSV</button>}
             {results && <button className="btn-export" onClick={exportDetailCSV}>Detail CSV</button>}
+            {results && <button className="btn-export btn-pdf" onClick={function() { window.print(); }}>Save as PDF</button>}
           </div>
         </div>
       </div>
 
       {running && progress.total > 0 && (
-        <div className="progress-wrap">
+        <div className="progress-wrap no-print">
           <div className="progress-info">
             <span>{progress.account}</span>
             <span>{progress.current} / {progress.total}</span>
@@ -613,7 +567,7 @@ export default function App() {
         </div>
       )}
 
-      {error && <div className="error-box">{error}</div>}
+      {error && <div className="error-box no-print">{error}</div>}
 
       {results && (
         <>
@@ -636,7 +590,7 @@ export default function App() {
                     <th className="left">Hotel</th><th>Calls</th><th>Booked</th><th>High Intent</th>
                     <th>Rate</th><th>Revenue</th>
                     <th className="gads">GAds Calls</th><th className="gads">GAds Book</th><th className="gads">GAds Rev</th>
-                    <th></th>
+                    <th className="no-print"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -653,7 +607,7 @@ export default function App() {
                         <td className="mono gads-val">{a.google_ads_calls || "—"}</td>
                         <td className={"mono gads-val " + (a.google_ads_booked > 0 ? "positive" : "")}>{a.google_ads_booked || "—"}</td>
                         <td className="mono gads-val bold">{a.google_ads_value > 0 ? fmt(a.google_ads_value) : "—"}</td>
-                        <td>
+                        <td className="no-print">
                           {(a.booked > 0 || a.high_intent > 0) && (
                             <button className="expand-btn" onClick={function() { setExpanded(function(p) { var n = {}; n[a.account_id] = !p[a.account_id]; return Object.assign({}, p, n); }); }}>
                               {expanded[a.account_id] ? "▾" : "▸"}
@@ -683,7 +637,7 @@ export default function App() {
       )}
 
       {log.length > 0 && (
-        <details className="log-section" open={running || !!error}>
+        <details className="log-section no-print" open={running || !!error}>
           <summary>Activity Log ({log.length})</summary>
           <div className="log-output">
             {log.map(function(l, i) { return <div key={i}>{l}</div>; })}
