@@ -1,9 +1,15 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+ import { useState, useRef, useCallback, useEffect } from "react";
 import "./App.css";
 
 var API_PROXY = "/api/whatconverts";
 var ANALYZE_URL = "/api/analyze";
 var LEAD_URL = "/api/lead";
+
+// When a ?token= is present, the app runs in locked client mode: every data
+// call goes through /api/client, which is scoped to one account server-side.
+var CLIENT_TOKEN = (typeof window !== "undefined")
+  ? new URLSearchParams(window.location.search).get("token")
+  : null;
 
 var HOTEL_ACCOUNTS = [
   "Abellona Inn",
@@ -127,7 +133,7 @@ export default function App() {
   var defaultStart = thirtyAgo.toISOString().split("T")[0];
   var defaultEnd = new Date().toISOString().split("T")[0];
 
-  var [mode, setMode] = useState("portfolio");
+  var [mode, setMode] = useState(CLIENT_TOKEN ? "client" : "portfolio");
   var [month, setMonth] = useState(defaultMonth);
   var [startDate, setStartDate] = useState(defaultStart);
   var [endDate, setEndDate] = useState(defaultEnd);
@@ -148,8 +154,10 @@ export default function App() {
 
   var apiFetch = useCallback(function(endpoint, params) {
     params = params || {};
-    var url = new URL(API_PROXY, window.location.origin);
+    var base = CLIENT_TOKEN ? "/api/client" : API_PROXY;
+    var url = new URL(base, window.location.origin);
     url.searchParams.set("endpoint", endpoint);
+    if (CLIENT_TOKEN) url.searchParams.set("token", CLIENT_TOKEN);
     Object.keys(params).forEach(function(k) { url.searchParams.set(k, params[k]); });
     return fetch(url.toString()).then(function(resp) {
       if (resp.status === 401) throw new Error("AUTH_FAILED");
@@ -192,7 +200,10 @@ export default function App() {
   }, [apiFetch]);
 
   var fetchLeadDetail = useCallback(function(leadId) {
-    return fetch(LEAD_URL + "?id=" + leadId).then(function(r) { return r.json(); });
+    var u = CLIENT_TOKEN
+      ? "/api/client?endpoint=leads&lead_id=" + encodeURIComponent(leadId) + "&token=" + encodeURIComponent(CLIENT_TOKEN)
+      : LEAD_URL + "?id=" + leadId;
+    return fetch(u).then(function(r) { return r.json(); });
   }, []);
 
   var analyzeTranscripts = useCallback(function(batch, accountName) {
@@ -215,6 +226,11 @@ export default function App() {
 
   useEffect(function() {
     fetchAllPages("accounts", { accounts_per_page: 50 }, "accounts").then(function(accts) {
+      if (CLIENT_TOKEN) {
+        setAllAccounts(accts);
+        if (accts[0]) setSelectedClient(accts[0].account_name);
+        return;
+      }
       var hotels = accts.filter(function(a) { return isHotelAccount(a.account_name || ""); });
       hotels.sort(function(a, b) { return (a.account_name || "").localeCompare(b.account_name || ""); });
       setAllAccounts(hotels);
@@ -502,17 +518,19 @@ export default function App() {
             <text x="8" y="23" fill="#bbe1fa" fontSize="20" fontWeight="700" fontFamily="sans-serif">B</text>
           </svg>
           <div>
-            <h1>Call Booking Report</h1>
+            <h1>{CLIENT_TOKEN && selectedClient ? selectedClient : "Call Booking Report"}</h1>
             <p className="no-print">AI-powered phone booking analysis</p>
             {results && <p className="only-print" style={{fontSize:"13px",color:"#6b7280",marginTop:"2px"}}>{results.month}</p>}
           </div>
         </div>
       </header>
 
+      {!CLIENT_TOKEN && (
       <div className="mode-tabs no-print">
         <button className={"mode-tab " + (mode === "portfolio" ? "active" : "")} onClick={function() { setMode("portfolio"); setResults(null); }}>All Hotels (Monthly)</button>
         <button className={"mode-tab " + (mode === "client" ? "active" : "")} onClick={function() { setMode("client"); setResults(null); }}>Single Client (Custom Dates)</button>
       </div>
+      )}
 
       <div className="controls no-print">
         <div className="control-row">
@@ -523,6 +541,7 @@ export default function App() {
             </div>
           ) : (
             <>
+              {!CLIENT_TOKEN && (
               <div className="field">
                 <label>Client</label>
                 <select value={selectedClient} onChange={function(e) { setSelectedClient(e.target.value); }}
@@ -533,6 +552,7 @@ export default function App() {
                   })}
                 </select>
               </div>
+              )}
               <div className="field">
                 <label>Start Date</label>
                 <input type="date" value={startDate} onChange={function(e) { setStartDate(e.target.value); }} />
