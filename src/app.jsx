@@ -36,7 +36,10 @@ var HOTEL_ACCOUNTS = [
   "Village by the Sea",
   "Wavecrest",
   "White Bay Villas",
-  "York Harbor Inn"
+  "York Harbor Inn",
+ "Beachcomber Resort",
+ "Cove at Yarmouth",
+ "Tree Service"
 ];
 
 function isHotelAccount(name) {
