@@ -23,9 +23,11 @@ module.exports = async function handler(req, res) {
     var transcript = (t.transcript || "").substring(0, 5000);
 
     // FAST CHECK: If transcript contains ### it's a redacted credit card = definite booking
-    var hasRedactedCC = (transcript.match(/###/g) || []).length >= 2;
+   var hasRedactedCC = (transcript.match(/###/g) || []).length >= 2;
+var hasRawCC = /\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b/.test(transcript);
+var hasCreditCard = hasRedactedCC || hasRawCC;
 
-    if (hasRedactedCC) {
+   if (hasCreditCard) {
       // Still send to AI but just for the value and summary
       try {
         var ccResponse = await fetch("https://api.anthropic.com/v1/messages", {
