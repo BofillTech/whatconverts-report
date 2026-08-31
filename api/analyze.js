@@ -26,9 +26,10 @@ module.exports = async function handler(req, res) {
   var transcripts = body.transcripts.slice(0, 5);
   var accountName = body.account_name || "Unknown";
   var accountId = body.account_id != null ? body.account_id : null;
+  var override = { vertical: body.vertical, note: body.note };
 
   try {
-    var out = await classify.classifyBatch(apiKey, transcripts, accountName, accountId);
+    var out = await classify.classifyBatch(apiKey, transcripts, accountName, accountId, override);
     return res.status(200).json(out);
   } catch (err) {
     console.error("analyze failed", err);
