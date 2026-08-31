@@ -11,41 +11,24 @@ var CLIENT_TOKEN = (typeof window !== "undefined")
   ? new URLSearchParams(window.location.search).get("token")
   : null;
 
-var HOTEL_ACCOUNTS = [
-  "Abellona Inn",
-  "Archway Fishtown",
-  "Atlantic Inn",
-  "Atlantic Oceanfront",
-  "Briney Breezes",
-  "Fun Hog",
-  "Inn At Highway 1",
-  "Little Sur Inn",
-  "Montauk Manor",
-  "Moonstone Landing",
-  "Mount Nevis",
-  "Old Orchard Beach",
-  "Rhumb Line",
-  "Rhumbline",
-  "Rose Farm",
-  "Sebastians BVI",
-  "Sole East",
-  "Southampton Inn",
-  "Spring House",
-  "Surf Lodge",
-  "VBTS",
-  "Village by the Sea",
-  "Wavecrest",
-  "White Bay Villas",
-  "York Harbor Inn",
- "Beachcomber Resort",
- "Cove at Yarmouth",
- "Tree Service"
-];
+var CONFIG_URL = "/api/config";
 
-function isHotelAccount(name) {
-  var n = name.toLowerCase();
-  return HOTEL_ACCOUNTS.some(function(h) { return n.includes(h.toLowerCase()); });
+// Ask the server which vertical each account belongs to (hotel vs leadgen).
+function tagVerticals(accts) {
+  return fetch(CONFIG_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ accounts: accts.map(function(a) { return { account_id: a.account_id, account_name: a.account_name }; }) })
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    var map = {};
+    (d.accounts || []).forEach(function(x) { map[String(x.account_id)] = x.vertical; });
+    return accts.map(function(a) { return Object.assign({}, a, { vertical: map[String(a.account_id)] || "hotel" }); });
+  }).catch(function() {
+    return accts.map(function(a) { return Object.assign({}, a, { vertical: "hotel" }); });
+  });
 }
+
+var TIER_ORDER = { HOT: 0, WARM: 1, COLD: 2, NOT_RELEVANT: 3, ERROR: 4 };
 
 var MIN_CALL_DURATION = 20;
 
@@ -126,6 +109,43 @@ function BookingDetail({ bookings }) {
   );
 }
 
+function LeadDetail({ leads, showAll }) {
+  var rows = leads.slice().sort(function(a, b) {
+    var t = (TIER_ORDER[a.tier] || 0) - (TIER_ORDER[b.tier] || 0);
+    return t !== 0 ? t : (b.score || 0) - (a.score || 0);
+  });
+  if (!showAll) rows = rows.filter(function(l) { return l.tier === "HOT" || l.tier === "WARM"; });
+  if (!rows.length) return <div className="detail-empty">{showAll ? "No calls analyzed" : "No hot or warm leads identified"}</div>;
+  return (
+    <div className="detail-table-wrap">
+      <table className="detail-table">
+        <thead>
+          <tr>
+            <th>Date</th><th>Tier</th><th>Score</th><th>Caller</th><th>Subject</th><th>Next Action</th><th>Source</th><th>Summary</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(function(l, i) {
+            var who = [l.contact_name, l.phone].filter(Boolean).join(" · ");
+            return (
+              <tr key={i}>
+                <td>{l.date ? new Date(l.date).toLocaleDateString() : "—"}</td>
+                <td><span className={"type-tag " + (l.tier || "").toLowerCase()}>{l.tier}</span></td>
+                <td className="mono">{l.score || "—"}</td>
+                <td>{who || "—"}</td>
+                <td className="summary-cell">{l.subject || "—"}</td>
+                <td className="summary-cell">{l.next_action || "—"}</td>
+                <td>{l.source}{l.medium ? " / " + l.medium : ""}{l.is_google_ads ? " (GAds)" : ""}</td>
+                <td className="summary-cell">{l.summary || "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function App() {
   var now = new Date();
   now.setMonth(now.getMonth() - 1);
@@ -149,6 +169,7 @@ export default function App() {
   var [error, setError] = useState(null);
   var [progress, setProgress] = useState({ current: 0, total: 0, account: "" });
   var [expanded, setExpanded] = useState({});
+  var [showAllLeads, setShowAllLeads] = useState(false);
   var abortRef = useRef(false);
 
   var addLog = useCallback(function(msg) {
@@ -209,11 +230,11 @@ export default function App() {
     return fetch(u).then(function(r) { return r.json(); });
   }, []);
 
-  var analyzeTranscripts = useCallback(function(batch, accountName) {
+  var analyzeTranscripts = useCallback(function(batch, accountName, accountId) {
     return fetch(ANALYZE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ transcripts: batch, account_name: accountName })
+      body: JSON.stringify({ transcripts: batch, account_name: accountName, account_id: accountId })
     }).then(function(resp) {
       if (!resp.ok) {
         return resp.json().catch(function() { return {}; }).then(function(err) {
@@ -223,31 +244,29 @@ export default function App() {
       return resp.json();
     }).then(function(data) {
       if (data.error) return { error: data.error, results: [] };
-      return { results: data.results || [] };
+      return { results: data.results || [], vertical: data.vertical };
     });
   }, []);
 
   useEffect(function() {
-    fetchAllPages("accounts", { accounts_per_page: 50 }, "accounts").then(function(accts) {
-      if (CLIENT_TOKEN) {
-        setAllAccounts(accts);
-        if (accts[0]) setSelectedClient(accts[0].account_name);
-        return;
-      }
-      var hotels = accts.filter(function(a) { return isHotelAccount(a.account_name || ""); });
-      hotels.sort(function(a, b) { return (a.account_name || "").localeCompare(b.account_name || ""); });
-      setAllAccounts(hotels);
+    fetchAllPages("accounts", { accounts_per_page: 50 }, "accounts").then(tagVerticals).then(function(accts) {
+      accts.sort(function(a, b) { return (a.account_name || "").localeCompare(b.account_name || ""); });
+      setAllAccounts(accts);
+      if (CLIENT_TOKEN && accts[0]) setSelectedClient(accts[0].account_name);
     }).catch(function() {});
   }, [fetchAllPages]);
 
   function processAccount(acct, dateStart, dateEnd) {
     var name = acct.account_name || "Account " + acct.account_id;
     addLog("Processing: " + name);
+    var vertical = acct.vertical || "hotel";
     var totals = {
-      account_name: name, account_id: acct.account_id,
+      account_name: name, account_id: acct.account_id, vertical: vertical,
       total_calls: 0, booked: 0, high_intent: 0, total_value: 0,
       google_ads_calls: 0, google_ads_booked: 0, google_ads_high_intent: 0, google_ads_value: 0,
-      bookings: [], leads_to_analyze: []
+      hot: 0, warm: 0, cold: 0, not_relevant: 0, errors: 0,
+      google_ads_hot: 0, google_ads_warm: 0,
+      bookings: [], leads: [], leads_to_analyze: []
     };
     var profiles = acct.profiles || [];
     var profileIndex = 0;
@@ -265,6 +284,19 @@ export default function App() {
           if (lead.spam || lead.duplicate) return;
           var gads = isGoogleAds(lead);
           if (gads) totals.google_ads_calls++;
+          if (vertical === "leadgen") {
+            var dur = parseInt(lead.call_duration_seconds) || 0;
+            if (dur >= MIN_CALL_DURATION) {
+              totals.leads_to_analyze.push({
+                lead_id: lead.lead_id, date: lead.date_created || "",
+                source: lead.lead_source || "", medium: lead.lead_medium || "",
+                campaign: lead.lead_campaign || "", duration: dur, is_google_ads: gads,
+                phone: lead.caller_number || lead.phone_number || "",
+                caller_name: lead.caller_name || lead.contact_name || ""
+              });
+            }
+            return;
+          }
           var fieldResult = classifyFromFields(lead);
           if (fieldResult.isBooking) {
             totals.booked++;
@@ -330,7 +362,8 @@ export default function App() {
           transcriptsForAI.push({
             lead_id: String(lead.lead_id), transcript: transcript,
             date: lead.date, source: lead.source, medium: lead.medium,
-            campaign: lead.campaign, is_google_ads: lead.is_google_ads
+            campaign: lead.campaign, is_google_ads: lead.is_google_ads,
+            phone: lead.phone || "", caller_name: lead.caller_name || ""
           });
         }
         return new Promise(function(r) { setTimeout(r, 120); }).then(fetchNextTranscript);
@@ -348,10 +381,30 @@ export default function App() {
         var batch = transcriptsForAI.slice(batchIdx, batchIdx + 5);
         batchIdx += batch.length;
         addLog("  Analyzing batch " + Math.ceil(batchIdx / 5) + "...");
-        return analyzeTranscripts(batch, acct.account_name).then(function(resp) {
+        return analyzeTranscripts(batch, acct.account_name, acct.account_id).then(function(resp) {
           if (resp.error) addLog("  API ERROR: " + String(resp.error).substring(0, 200));
           var aiResults = resp.results || [];
+          if (acct.vertical === "leadgen") {
+            aiResults.forEach(function(r) {
+              var orig = transcriptsForAI.find(function(t) { return String(t.lead_id) === String(r.lead_id); });
+              if (!orig) return;
+              if (r.tier === "HOT") { acct.hot++; if (orig.is_google_ads) acct.google_ads_hot++; }
+              else if (r.tier === "WARM") { acct.warm++; if (orig.is_google_ads) acct.google_ads_warm++; }
+              else if (r.tier === "COLD") acct.cold++;
+              else if (r.tier === "NOT_RELEVANT") acct.not_relevant++;
+              else acct.errors++;
+              acct.leads.push({
+                lead_id: r.lead_id, date: orig.date, tier: r.tier, score: r.score, intent: r.intent,
+                subject: r.subject, next_action: r.next_action,
+                contact_name: r.contact_name || orig.caller_name || "", phone: orig.phone || "",
+                source: orig.source, medium: orig.medium, campaign: orig.campaign,
+                summary: r.summary || "", is_google_ads: orig.is_google_ads
+              });
+            });
+            return new Promise(function(r) { setTimeout(r, 300); }).then(processNextBatch);
+          }
           aiResults.forEach(function(r) {
+            if (r.classification === "ERROR") { acct.errors++; return; }
             if (r.classification === "BOOKED" || r.classification === "HIGH_INTENT") {
               var original = transcriptsForAI.find(function(t) { return String(t.lead_id) === String(r.lead_id); });
               if (!original) return;
@@ -380,7 +433,11 @@ export default function App() {
         });
       }
       return processNextBatch().then(function() {
-        addLog("  Result: " + acct.booked + " booked, " + acct.high_intent + " high-intent, " + fmt(acct.total_value));
+        if (acct.vertical === "leadgen") {
+          addLog("  Result: " + acct.hot + " hot, " + acct.warm + " warm, " + acct.cold + " cold, " + acct.not_relevant + " not relevant" + (acct.errors ? ", " + acct.errors + " errors" : ""));
+        } else {
+          addLog("  Result: " + acct.booked + " booked, " + acct.high_intent + " high-intent, " + fmt(acct.total_value) + (acct.errors ? " (" + acct.errors + " errors)" : ""));
+        }
       });
     });
   }
@@ -411,17 +468,18 @@ export default function App() {
     }
     setPhase("Pulling call data...");
     addLog("Fetching accounts...");
-    fetchAllPages("accounts", { accounts_per_page: 50 }, "accounts").then(function(accts) {
+    fetchAllPages("accounts", { accounts_per_page: 50 }, "accounts").then(tagVerticals).then(function(accts) {
       var accounts;
       if (mode === "client") {
         accounts = accts.filter(function(a) {
           return (a.account_name || "").toLowerCase().includes(selectedClient.toLowerCase());
         });
-        addLog("Single client mode: " + selectedClient + " (" + accounts.length + " matched)");
+        addLog("Single client mode: " + selectedClient + " (" + accounts.length + " matched, " + (accounts[0] ? accounts[0].vertical : "?") + ")");
       } else {
-        accounts = accts.filter(function(a) { return isHotelAccount(a.account_name || ""); });
+        var want = mode === "leadgen" ? "leadgen" : "hotel";
+        accounts = accts.filter(function(a) { return a.vertical === want; });
         accounts.sort(function(a, b) { return (a.account_name || "").localeCompare(b.account_name || ""); });
-        addLog("Portfolio mode: " + accounts.length + " hotel accounts");
+        addLog("Portfolio mode: " + accounts.length + " " + want + " accounts");
       }
       setProgress({ current: 0, total: accounts.length, account: "" });
       var reportData = [];
@@ -467,7 +525,8 @@ export default function App() {
       } else {
         dateLabel2 = getMonthRange(month).label;
       }
-      setResults({ data: reportData, month: dateLabel2, mode: mode });
+      var vert = mode === "leadgen" ? "leadgen" : mode === "portfolio" ? "hotel" : (reportData[0] ? reportData[0].vertical : "hotel");
+      setResults({ data: reportData, month: dateLabel2, mode: mode, vertical: vert });
       setPhase("");
       addLog("Done!");
     }).catch(function(e) {
@@ -479,8 +538,23 @@ export default function App() {
     });
   }, [mode, month, startDate, endDate, selectedClient, addLog, fetchAllPages, fetchLeadDetail, analyzeTranscripts]);
 
+  function downloadCSV(rows, filename) {
+    var csv = rows.map(function(r) { return r.map(function(c) { return '"' + String(c == null ? "" : c).replace(/"/g, '""') + '"'; }).join(","); }).join("\n");
+    var blob = new Blob([csv], { type: "text/csv" });
+    var a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = filename; a.click();
+  }
+
   var exportCSV = useCallback(function() {
     if (!results) return;
+    if (results.vertical === "leadgen") {
+      var lrows = [["Account","Total Calls","Hot","Warm","Cold","Not Relevant","Qualified Rate %","Google Ads Calls","GAds Hot","GAds Warm"]];
+      results.data.forEach(function(a) {
+        var q = a.total_calls > 0 ? (((a.hot + a.warm) / a.total_calls) * 100).toFixed(1) : "0";
+        lrows.push([a.account_name, a.total_calls, a.hot, a.warm, a.cold, a.not_relevant, q, a.google_ads_calls, a.google_ads_hot, a.google_ads_warm]);
+      });
+      return downloadCSV(lrows, "lead_quality.csv");
+    }
     var rows = [["Account","Total Calls","Booked","High Intent","Booking Rate %","Revenue","Google Ads Calls","GAds Booked","GAds High Intent","GAds Revenue"]];
     results.data.forEach(function(a) {
       var rate = a.total_calls > 0 ? ((a.booked / a.total_calls) * 100).toFixed(1) : "0";
@@ -494,6 +568,15 @@ export default function App() {
 
   var exportDetailCSV = useCallback(function() {
     if (!results) return;
+    if (results.vertical === "leadgen") {
+      var lrows = [["Account","Date","Tier","Score","Intent","Caller","Phone","Subject","Next Action","Source","Medium","Campaign","Summary","Google Ads","Lead ID"]];
+      results.data.forEach(function(acct) {
+        acct.leads.slice().sort(function(a, b) { return (b.score || 0) - (a.score || 0); }).forEach(function(l) {
+          lrows.push([acct.account_name, l.date, l.tier, l.score, l.intent, l.contact_name, l.phone, l.subject, l.next_action, l.source, l.medium, l.campaign, l.summary, l.is_google_ads ? "Yes" : "No", l.lead_id]);
+        });
+      });
+      return downloadCSV(lrows, "lead_quality_detail.csv");
+    }
     var rows = [["Account","Date","Classification","Value","Source","Medium","Campaign","Summary","Google Ads"]];
     results.data.forEach(function(acct) {
       acct.bookings.forEach(function(b) {
@@ -509,8 +592,11 @@ export default function App() {
   var grand = results ? results.data.reduce(function(t, a) {
     return { calls: t.calls + a.total_calls, booked: t.booked + a.booked, highIntent: t.highIntent + a.high_intent,
       value: t.value + a.total_value, gc: t.gc + a.google_ads_calls, gb: t.gb + a.google_ads_booked,
-      ghi: t.ghi + (a.google_ads_high_intent || 0), gv: t.gv + a.google_ads_value };
-  }, { calls:0, booked:0, highIntent:0, value:0, gc:0, gb:0, ghi:0, gv:0 }) : null;
+      ghi: t.ghi + (a.google_ads_high_intent || 0), gv: t.gv + a.google_ads_value,
+      hot: t.hot + (a.hot || 0), warm: t.warm + (a.warm || 0), cold: t.cold + (a.cold || 0), nr: t.nr + (a.not_relevant || 0),
+      ghot: t.ghot + (a.google_ads_hot || 0), gwarm: t.gwarm + (a.google_ads_warm || 0), errors: t.errors + (a.errors || 0) };
+  }, { calls:0, booked:0, highIntent:0, value:0, gc:0, gb:0, ghi:0, gv:0, hot:0, warm:0, cold:0, nr:0, ghot:0, gwarm:0, errors:0 }) : null;
+  var isLeadgen = results && results.vertical === "leadgen";
 
   return (
     <div className="app">
@@ -521,8 +607,8 @@ export default function App() {
             <text x="8" y="23" fill="#bbe1fa" fontSize="20" fontWeight="700" fontFamily="sans-serif">B</text>
           </svg>
           <div>
-            <h1>{CLIENT_TOKEN && selectedClient ? selectedClient : "Call Booking Report"}</h1>
-            <p className="no-print">AI-powered phone booking analysis</p>
+            <h1>{CLIENT_TOKEN && selectedClient ? selectedClient : "Call Report"}</h1>
+            <p className="no-print">AI-powered phone call analysis</p>
             {results && <p className="only-print" style={{fontSize:"13px",color:"#6b7280",marginTop:"2px"}}>{results.month}</p>}
           </div>
         </div>
@@ -531,13 +617,14 @@ export default function App() {
       {!CLIENT_TOKEN && (
       <div className="mode-tabs no-print">
         <button className={"mode-tab " + (mode === "portfolio" ? "active" : "")} onClick={function() { setMode("portfolio"); setResults(null); }}>All Hotels (Monthly)</button>
+        <button className={"mode-tab " + (mode === "leadgen" ? "active" : "")} onClick={function() { setMode("leadgen"); setResults(null); }}>All Lead Gen (Monthly)</button>
         <button className={"mode-tab " + (mode === "client" ? "active" : "")} onClick={function() { setMode("client"); setResults(null); }}>Single Client (Custom Dates)</button>
       </div>
       )}
 
       <div className="controls no-print">
         <div className="control-row">
-          {mode === "portfolio" ? (
+          {mode !== "client" ? (
             <div className="field">
               <label>Report Month</label>
               <input type="month" value={month} onChange={function(e) { setMonth(e.target.value); }} />
@@ -551,7 +638,7 @@ export default function App() {
                   style={{ padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: "6px", fontSize: "13px", fontFamily: "inherit", minWidth: "200px" }}>
                   <option value="">Select a client...</option>
                   {allAccounts.map(function(a) {
-                    return <option key={a.account_id} value={a.account_name}>{a.account_name}</option>;
+                    return <option key={a.account_id} value={a.account_name}>{a.account_name}{a.vertical === "leadgen" ? " (lead gen)" : ""}</option>;
                   })}
                 </select>
               </div>
@@ -574,6 +661,7 @@ export default function App() {
             {results && <button className="btn-export" onClick={exportCSV}>Summary CSV</button>}
             {results && <button className="btn-export" onClick={exportDetailCSV}>Detail CSV</button>}
             {results && <button className="btn-export btn-pdf" onClick={function() { window.print(); }}>Save as PDF</button>}
+            {isLeadgen && <label className="toggle-all"><input type="checkbox" checked={showAllLeads} onChange={function(e) { setShowAllLeads(e.target.checked); }} /> Show cold / not relevant</label>}
           </div>
         </div>
       </div>
@@ -594,6 +682,65 @@ export default function App() {
 
       {results && (
         <>
+          {isLeadgen ? (<>
+          <div className="stats-grid four">
+            <StatCard label="Total Calls" value={grand.calls.toLocaleString()} sub={grand.gc + " from Google Ads"} />
+            <StatCard label="Hot Leads" value={grand.hot.toLocaleString()} sub={grand.ghot + " from Google Ads"} />
+            <StatCard label="Warm Leads" value={grand.warm.toLocaleString()} sub={grand.gwarm + " from Google Ads"} />
+            <StatCard label="Qualified Rate" value={grand.calls > 0 ? ((grand.hot + grand.warm) / grand.calls * 100).toFixed(0) + "%" : "—"} sub={grand.nr + " not relevant" + (grand.errors ? ", " + grand.errors + " errors" : "")} />
+          </div>
+
+          <div className="table-container">
+            <div className="table-header">
+              <h2>{results.month}</h2>
+              <span className="table-meta">{results.data.filter(function(a) { return a.total_calls > 0; }).length} active {results.mode === "client" ? "profiles" : "clients"}</span>
+            </div>
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th className="left">Client</th><th>Calls</th><th>Hot</th><th>Warm</th><th>Cold</th><th>Not Rel.</th>
+                    <th>Qualified</th>
+                    <th className="gads">GAds Calls</th><th className="gads">GAds Hot</th><th className="gads">GAds Warm</th>
+                    <th className="no-print"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {results.data.filter(function(a) { return a.total_calls > 0; }).map(function(a, i) {
+                    var q = a.total_calls > 0 ? ((a.hot + a.warm) / a.total_calls * 100).toFixed(0) : "0";
+                    var isOpen = results.mode === "client" ? expanded[a.account_id] !== false : !!expanded[a.account_id];
+                    return [
+                      <tr key={a.account_id} className={i % 2 === 0 ? "even" : "odd"}>
+                        <td className="left name">{a.account_name}</td>
+                        <td className="mono">{a.total_calls}</td>
+                        <td className={"mono " + (a.hot > 0 ? "positive" : "muted")}>{a.hot}</td>
+                        <td className={"mono " + (a.warm > 0 ? "intent" : "muted")}>{a.warm}</td>
+                        <td className="mono muted">{a.cold}</td>
+                        <td className="mono muted">{a.not_relevant}</td>
+                        <td className="mono">{q}%</td>
+                        <td className="mono gads-val">{a.google_ads_calls || "—"}</td>
+                        <td className={"mono gads-val " + (a.google_ads_hot > 0 ? "positive" : "")}>{a.google_ads_hot || "—"}</td>
+                        <td className="mono gads-val">{a.google_ads_warm || "—"}</td>
+                        <td className="no-print">
+                          {a.leads.length > 0 && (
+                            <button className="expand-btn" onClick={function() { setExpanded(function(p) { var n = {}; n[a.account_id] = !isOpen; return Object.assign({}, p, n); }); }}>
+                              {isOpen ? "▾" : "▸"}
+                            </button>
+                          )}
+                        </td>
+                      </tr>,
+                      isOpen ? (
+                        <tr key={a.account_id + "-detail"} className="detail-row">
+                          <td colSpan={11}><LeadDetail leads={a.leads} showAll={showAllLeads} /></td>
+                        </tr>
+                      ) : null
+                    ];
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          </>) : (<>
           <div className="stats-grid four">
             <StatCard label="Total Calls" value={grand.calls.toLocaleString()} sub={grand.gc + " from Google Ads"} />
             <StatCard label="Confirmed Bookings" value={grand.booked.toLocaleString()} sub={grand.gb + " from Google Ads"} />
@@ -649,6 +796,8 @@ export default function App() {
               </table>
             </div>
           </div>
+
+          </>)}
 
           {results.data.filter(function(a) { return a.total_calls === 0; }).length > 0 && (
             <div className="no-activity">
